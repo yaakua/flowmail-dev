@@ -67,7 +67,7 @@ export default function Campaigns() {
         <label>{t(locale, "lifecycleGoal")}</label>
         <textarea value={goal} onChange={(event) => setGoal(event.target.value)} />
         <div className="row-actions">
-          <button disabled={busy} onClick={createCampaign}>{busy ? t(locale, "generating") : t(locale, "generate")}</button>
+          <button disabled={busy} onClick={createCampaign}>{busy ? t(locale, "creatingCampaign") : t(locale, "nextStep")}</button>
         </div>
       </section>
       <section className="panel">

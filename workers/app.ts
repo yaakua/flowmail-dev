@@ -15,7 +15,7 @@ import {
   verifyToken
 } from "@flowmail/email-core";
 import { runComplianceChecks } from "@flowmail/compliance";
-import { generateLifecycleTemplate, classifyReply, draftReply } from "./ai";
+import { classifyReply, draftReply } from "./ai";
 import {
   CloudflareEmailError,
   applyCloudflareEmailRouting,
@@ -660,7 +660,7 @@ app.post("/api/v1/campaigns/draft", async (c) => {
   const body = z.object({ goal: z.string().min(1), name: z.string().optional() }).parse(await c.req.json());
   const now = new Date().toISOString();
   const product = await getProduct(c.env.DB);
-  const draft = await generateLifecycleTemplate(c.env, product, body.goal);
+  const draft = buildLifecycleTemplateDraft(product, body.goal);
   const templateId = crypto.randomUUID();
   const campaignId = crypto.randomUUID();
   await c.env.DB.batch([
@@ -1598,6 +1598,26 @@ function escapeHtmlForEmail(value: string) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function buildLifecycleTemplateDraft(product: Product | null, goal: string) {
+  const productName = product?.name || "your product";
+  const productUrl = product?.url || "https://example.com";
+  const safeProductName = escapeHtmlForEmail(productName);
+  const safeProductUrl = escapeHtmlForEmail(productUrl);
+  const safeGoal = escapeHtmlForEmail(goal);
+  const htmlBody = [
+    "<p>Hi {{full_name}},</p>",
+    `<p>We are reaching out about ${safeProductName}.</p>`,
+    `<p>${safeGoal}</p>`,
+    `<p><a href="${safeProductUrl}">Continue setup</a></p>`
+  ].join("");
+
+  return {
+    subject: `A quick next step for ${productName}`,
+    html_body: htmlBody,
+    text_body: htmlToText(htmlBody)
+  };
 }
 
 function errorMessage(error: unknown) {

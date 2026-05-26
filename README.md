@@ -10,6 +10,8 @@ Flowmail is intentionally not a Mailchimp, Customer.io, Mautic, or listmonk repl
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/yaakua/flowmail)
 
+**One-click deploy:** [Deploy Flowmail to your Cloudflare account](https://deploy.workers.cloudflare.com/?url=https://github.com/yaakua/flowmail). Cloudflare will open its Workers deployment flow, connect the repository, provision the resources declared in `wrangler.jsonc`, and deploy the Worker.
+
 ## Goals
 
 - Make self-hosted lifecycle email setup fast for Cloudflare users.
@@ -49,7 +51,7 @@ Flowmail is intentionally not a Mailchimp, Customer.io, Mautic, or listmonk repl
 
 ## Deployment
 
-The recommended path is the Deploy to Cloudflare button above. The Worker configuration provisions the required Cloudflare bindings declared in `wrangler.jsonc`.
+The recommended path is the [Deploy Flowmail to your Cloudflare account](https://deploy.workers.cloudflare.com/?url=https://github.com/yaakua/flowmail) link above. The Worker configuration provisions the required Cloudflare bindings declared in `wrangler.jsonc`.
 
 After deployment:
 

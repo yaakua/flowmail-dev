@@ -519,14 +519,12 @@ export function CloudflareEmailConfigPanel({
             <strong>{busy === "verify" ? t(locale, "cloudflareAutoVerifying") : t(locale, "cloudflareAutoVerifyTitle")}</strong>
             <p>{t(locale, config?.localSetupMode ? "cloudflareLocalVerifyBody" : "cloudflareAutoVerifyBody")}</p>
           </div>
-          {mode === "setup" ? (
-            <div className="cloudflare-test-row">
-              <Field label={t(locale, "testRecipient")} help={localizedHelp.testRecipient}>
-                <input placeholder="you@example.com" value={testTo} onChange={(event) => setTestTo(event.target.value)} />
-              </Field>
-              <button onClick={sendTestEmail} disabled={Boolean(busy)}>{busy === "test" ? t(locale, "sendingTestEmail") : t(locale, "sendTestEmail")}</button>
-            </div>
-          ) : null}
+          <div className="cloudflare-test-row">
+            <Field label={t(locale, "testRecipient")} help={localizedHelp.testRecipient}>
+              <input placeholder="you@example.com" value={testTo} onChange={(event) => setTestTo(event.target.value)} />
+            </Field>
+            <button onClick={sendTestEmail} disabled={Boolean(busy)}>{busy === "test" ? t(locale, "sendingTestEmail") : t(locale, "sendTestEmail")}</button>
+          </div>
         </div>
       ) : null}
 
