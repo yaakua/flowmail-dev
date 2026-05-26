@@ -1,0 +1,59 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "flowmail",
+  "compatibility_date": "2026-04-26",
+  "main": "./workers/app.ts",
+  "observability": {
+    "enabled": true
+  },
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "vars": {
+    "DEFAULT_LOCALE": "en",
+    "DAILY_SEND_LIMIT": "250",
+    "SEND_RATE_PER_MINUTE": "30",
+    "WORKER_NAME": "flowmail"
+  },
+  "send_email": [
+    {
+      "name": "EMAIL",
+      "remote": true
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "flowmail",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "flowmail-assets",
+      "preview_bucket_name": "flowmail-assets-preview"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "SEND_QUEUE",
+        "queue": "flowmail-send"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "flowmail-send",
+        "max_batch_size": 10,
+        "max_batch_timeout": 10,
+        "max_retries": 3,
+        "dead_letter_queue": "flowmail-send-dlq"
+      }
+    ]
+  },
+  "ai": {
+    "binding": "AI"
+  }
+}

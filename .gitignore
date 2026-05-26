@@ -1,0 +1,14 @@
+node_modules
+.wrangler
+.react-router
+.playwright-cli
+build
+dist
+output
+worker-configuration.d.ts
+*.tsbuildinfo
+.DS_Store
+.env
+.env.*
+!.env.example
+.dev.vars

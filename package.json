@@ -1,0 +1,59 @@
+{
+  "name": "flowmail",
+  "version": "0.1.0",
+  "private": false,
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Open-source lifecycle email for SaaS founders, running on your own Cloudflare account.",
+  "cloudflare": {
+    "label": "Flowmail",
+    "products": ["Workers", "D1", "R2", "Queues", "Workers AI", "Email Routing", "Email Service"],
+    "bindings": {
+      "DEFAULT_LOCALE": {
+        "description": "Default UI locale. Use `en` or `zh-CN`."
+      },
+      "DAILY_SEND_LIMIT": {
+        "description": "Maximum campaign emails sent in a rolling 24-hour window. Start low until the sender is proven."
+      },
+      "SEND_RATE_PER_MINUTE": {
+        "description": "Maximum campaign emails sent per rolling minute by the queue consumer."
+      },
+      "WORKER_NAME": {
+        "description": "Worker service name used when creating Cloudflare Email Routing worker actions. Defaults to `flowmail`."
+      }
+    }
+  },
+  "scripts": {
+    "build": "react-router build",
+    "cf-typegen": "wrangler types",
+    "deploy": "npm run build && wrangler deploy",
+    "dev": "react-router dev",
+    "preview": "npm run build && vite preview",
+    "test": "vitest run",
+    "typecheck": "npm run cf-typegen && react-router typegen && tsc -b"
+  },
+  "dependencies": {
+    "@cloudflare/vite-plugin": "^1.0.12",
+    "@react-router/dev": "^7.5.3",
+    "@tailwindcss/vite": "^4.1.4",
+    "hono": "^4.7.11",
+    "isbot": "^5.1.27",
+    "jose": "^6.2.1",
+    "postal-mime": "^2.6.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-router": "^7.5.3",
+    "vite": "^6.3.3",
+    "vite-tsconfig-paths": "^5.1.4",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251128.0",
+    "@types/node": "^20.19.37",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.74.0"
+  }
+}
