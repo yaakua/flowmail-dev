@@ -1,31 +1,38 @@
 # Flowmail
 
-Open-source lifecycle email for SaaS founders, running on your own Cloudflare account.
+Flowmail is an open-source, Cloudflare-native lifecycle email tool for small SaaS teams, indie hackers, and product studios that want to run a simple email workflow inside their own Cloudflare account.
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/yangkui/flowmail)
+It is built for one practical job:
 
-Flowmail is a Cloudflare-native email stack for one narrow job: import a user list, generate a compliant lifecycle email, approve a limited send, track clicks and unsubscribes, receive replies, and let an Agent draft follow-up responses.
+> Import a contact list, draft a lifecycle email, review compliance, send a controlled batch, track clicks and unsubscribes, receive replies, and draft follow-up responses.
 
-## Who should deploy it
+Flowmail is intentionally not a Mailchimp, Customer.io, Mautic, or listmonk replacement. Use those products if you need mature newsletters, journey automation, CRM sync, A/B testing, BI exports, or a multi-tenant marketing platform. Use Flowmail if you want a small self-hosted workflow where contacts, replies, campaign records, and Cloudflare setup stay under your own account.
 
-- SaaS founders and indie hackers already using Cloudflare for their domain.
-- Open-source maintainers who want self-hosted project updates and reply handling.
-- Product studios that prefer one isolated Cloudflare deployment per client.
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/yaakua/flowmail)
 
-Flowmail is not a Mailchimp, Customer.io, Mautic, or listmonk replacement. Use those if you need mature newsletter workflows, multi-step automation, CRM sync, or BI. Use Flowmail if you want a small open-source lifecycle email workflow that keeps contacts, replies, and sending permissions inside your Cloudflare account.
+## Goals
 
-## What works in v0.1
+- Make self-hosted lifecycle email setup fast for Cloudflare users.
+- Keep operational data in the deployer's Cloudflare account.
+- Provide a small operator console for campaign drafting, approval, sending, reply triage, and follow-up.
+- Avoid asking users to manually provision databases, object storage, queues, or secrets during the happy path.
+- Keep Cloudflare API tokens scoped, encrypted, and removable.
 
-- Deploy to Cloudflare compatible Worker app.
-- Built-in admin password login for the admin UI.
-- Setup wizard with Cloudflare Email checks, encrypted token storage, and reply-to routing.
-- Single product configuration.
-- CSV contact import with validation and dedupe.
-- AI-assisted lifecycle email draft with deterministic fallback.
-- Manual template edit and preview.
-- Compliance checks before approval.
-- Queue-backed campaign sending through Cloudflare Email Service.
-- Click tracking and unsubscribe pages.
+## Features
+
+- Cloudflare Worker app with React Router admin UI.
+- Built-in admin password login.
+- Cloudflare Email setup wizard with token-first discovery.
+- Encrypted Cloudflare API token storage.
+- Automatic Email Routing rule creation for reply-to addresses.
+- CSV contact import with validation, dedupe, and import reports.
+- Product profile and sender configuration.
+- AI-assisted lifecycle email drafting with deterministic fallback.
+- Template preview and manual editing.
+- Compliance checks before campaign approval.
+- Queue-backed batch sending through Cloudflare Email Service.
+- Click tracking with wrapped redirect links.
+- Unsubscribe pages and suppression handling.
 - Reply inbox through Cloudflare Email Routing.
 - Agent reply drafts that require manual approval.
 - English and Simplified Chinese UI catalogs.
@@ -34,13 +41,35 @@ Flowmail is not a Mailchimp, Customer.io, Mautic, or listmonk replacement. Use t
 
 - Frontend: React 19, React Router v7, CSS.
 - API: Hono on Cloudflare Workers.
-- Storage: D1 for relational data, R2 for imports and raw inbound email.
-- Jobs: one Cloudflare Queue for campaign sends.
+- Storage: D1 for relational data.
+- Files: R2 for imports and raw inbound email.
+- Jobs: Cloudflare Queues for campaign sends.
 - AI: Workers AI binding with safe fallback drafts.
 - Email: Cloudflare Email Service and Email Routing.
-- Auth: built-in admin password login.
 
-## Quick start
+## Deployment
+
+The recommended path is the Deploy to Cloudflare button above. The Worker configuration provisions the required Cloudflare bindings declared in `wrangler.jsonc`.
+
+After deployment:
+
+1. Open the deployed Worker.
+2. Sign in with username `admin` and password `flowmail-admin`.
+3. In setup, create or paste a scoped Cloudflare user API token.
+4. Let Flowmail discover your zone and Worker.
+5. Enable Cloudflare Email Routing if needed.
+6. Enable Cloudflare Email Service and verify the sending domain.
+7. Apply the reply-to route and send a test email.
+
+Flowmail initializes its D1 schema at runtime. It also generates internal signing and encryption secrets automatically when no Worker secret override is provided.
+
+### Custom Domain
+
+For production, bind a custom domain such as `flowmail.example.com` to the Worker in Cloudflare. Open Flowmail from that domain before approving a campaign. Flowmail remembers the app origin and uses it for wrapped click links and unsubscribe links.
+
+`PUBLIC_APP_URL` remains an optional advanced override if you need to pin the app URL explicitly.
+
+### Local Development
 
 ```bash
 npm install
@@ -53,17 +82,7 @@ Apply local D1 migrations when using Wrangler:
 npx wrangler d1 migrations apply flowmail --local
 ```
 
-## Deploy
-
-1. Click the Deploy to Cloudflare button.
-2. Open the deployed Worker and sign in with username `admin` and password `flowmail-admin`.
-3. In the setup wizard, use the Create Flowmail token link, or open Dashboard > My Profile > API Tokens > Create Token > Custom token, then discover your zone and Worker and apply the reply-to route automatically.
-4. Enable Cloudflare Email Routing for your domain if it is not already enabled.
-5. Enable Cloudflare Email Service and verify your sending domain.
-
-Flowmail initializes its D1 schema at runtime, so first-time Deploy to Cloudflare users do not need to run migrations before opening the setup wizard. Contributors can still apply migrations manually when developing locally.
-
-Wrangler fallback:
+Wrangler deploy fallback:
 
 ```bash
 npm install
@@ -71,13 +90,34 @@ npx wrangler d1 migrations apply flowmail --remote
 npm run deploy
 ```
 
-## Current limits
+## Security And Sensitive Data
+
+Do not commit real secrets, contact lists, raw customer emails, or private replies.
+
+The repository intentionally ignores local secret files and generated artifacts:
+
+- `.dev.vars`
+- `.env`
+- `.env.*` except `.env.example`
+- `.wrangler/`
+- `.react-router/`
+- `build/`
+- `dist/`
+- `worker-configuration.d.ts`
+- `*.tsbuildinfo`
+
+Cloudflare API tokens used by the setup wizard are encrypted before storage and are never returned to the browser as plaintext. Use a scoped custom user API token, not a Global API Key.
+
+Default admin credentials are meant to get a new self-hosted deployment started. Change or protect access before using Flowmail with real data.
+
+## Current Limits
 
 - Single organization and single product.
-- No RBAC or multi-tenant SaaS control plane.
-- No A/B testing, journey builder, CRM sync, or analytics warehouse.
+- No per-user RBAC.
+- No multi-tenant SaaS control plane.
+- No journey builder, A/B testing, CRM sync, or analytics warehouse.
 - Email Service availability and limits depend on the deployed Cloudflare account.
-- Saved Cloudflare API tokens are encrypted with an automatically generated instance key; create a Custom token from My Profile > API Tokens, not a Global API Key or Account API Token. Use Zone: Zone Read, Zone: DNS Read, Zone: Email Routing Rules Read/Edit, Account: Email Sending Write, and Account: Workers Scripts Read, then delete it from Settings when no longer needed.
+- Deletion/export workflows are planned but not complete.
 
 ## Documentation
 
