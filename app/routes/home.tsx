@@ -18,14 +18,13 @@ async function needsInitialSetup(context: LoaderFunctionArgs["context"]) {
   try {
     const db = context.cloudflare.env.DB as D1Database;
     const product = await db.prepare(
-      "SELECT default_from_email, sending_domain, reply_to_email, organization_address FROM products LIMIT 1"
-    ).first<{ default_from_email: string; sending_domain: string; reply_to_email: string; organization_address: string }>();
+      "SELECT default_from_email, sending_domain, reply_to_email FROM products LIMIT 1"
+    ).first<{ default_from_email: string; sending_domain: string; reply_to_email: string }>();
     return !product
       || !product.default_from_email
       || product.default_from_email.includes("example.com")
       || !product.sending_domain
-      || !product.reply_to_email
-      || !product.organization_address;
+      || !product.reply_to_email;
   } catch {
     return true;
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { htmlToText, parseCsvContacts, renderTemplate, signToken, verifyToken, validateSenderDomain } from "./index";
+import { appendComplianceFooter, appendTextFooter, htmlToText, parseCsvContacts, renderTemplate, signToken, verifyToken, validateSenderDomain } from "./index";
 
 describe("email core", () => {
   it("parses contacts, skips invalid rows, and dedupes emails", () => {
@@ -49,6 +49,21 @@ describe("email core", () => {
 
   it("derives plain text from basic HTML email content", () => {
     expect(htmlToText('<p>Hi Ada,</p><p><a href="https://example.com">Continue</a></p>')).toBe("Hi Ada,\n\nContinue: https://example.com");
+  });
+
+  it("appends a neutral compliance footer without asserting signup consent", () => {
+    const html = appendComplianceFooter("<p>Hi Ada,</p>", "https://app.example/unsubscribe");
+
+    expect(html).toContain("If you do not want to receive emails like this");
+    expect(html).toContain('href="https://app.example/unsubscribe"');
+    expect(html).not.toContain("signed up for updates");
+    expect(html).not.toContain("Acme");
+  });
+
+  it("appends the same neutral unsubscribe context to text emails", () => {
+    expect(appendTextFooter("Hi Ada", "https://app.example/unsubscribe")).toBe(
+      "Hi Ada\n\n--\nIf you do not want to receive emails like this, unsubscribe: https://app.example/unsubscribe"
+    );
   });
 
   it("validates sender domains", () => {

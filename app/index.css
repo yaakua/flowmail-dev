@@ -2291,6 +2291,20 @@ input[readonly] {
   box-shadow: var(--shadow-float);
 }
 
+.campaign-test-modal {
+  width: min(34rem, calc(100vw - 2rem));
+}
+
+.campaign-test-modal form {
+  display: grid;
+  gap: var(--space-xs);
+  margin-top: var(--space-md);
+}
+
+.campaign-test-input {
+  min-height: 7rem;
+}
+
 .help-modal {
   width: min(35rem, calc(100vw - 2rem));
 }

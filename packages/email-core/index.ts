@@ -187,14 +187,14 @@ export function renderTemplate(input: string, values: Record<string, unknown>) {
   });
 }
 
-export function appendComplianceFooter(html: string, organizationAddress: string, unsubscribeUrl: string) {
-  const footer = `<hr><p style="font-size:12px;color:#647067;line-height:1.5">You are receiving this email because you signed up for updates. ${escapeHtml(organizationAddress)}<br><a href="${escapeAttribute(unsubscribeUrl)}">Unsubscribe</a></p>`;
+export function appendComplianceFooter(html: string, unsubscribeUrl: string) {
+  const footer = `<hr><p style="font-size:12px;color:#647067;line-height:1.5">If you do not want to receive emails like this, <a href="${escapeAttribute(unsubscribeUrl)}">unsubscribe</a>.</p>`;
   if (/<\/body>/i.test(html)) return html.replace(/<\/body>/i, `${footer}</body>`);
   return `${html}${footer}`;
 }
 
-export function appendTextFooter(text: string, organizationAddress: string, unsubscribeUrl: string) {
-  return `${text.trim()}\n\n--\n${organizationAddress}\nUnsubscribe: ${unsubscribeUrl}`;
+export function appendTextFooter(text: string, unsubscribeUrl: string) {
+  return `${text.trim()}\n\n--\nIf you do not want to receive emails like this, unsubscribe: ${unsubscribeUrl}`;
 }
 
 export function htmlToText(html: string) {

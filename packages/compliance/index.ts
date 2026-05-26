@@ -6,7 +6,6 @@ export type ComplianceInput = {
   subject: string;
   htmlBody: string;
   textBody: string;
-  organizationAddress?: string | null;
   totalRecipients: number;
   suppressedRecipients: number;
   consentlessRecipients: number;
@@ -34,14 +33,6 @@ export function runComplianceChecks(input: ComplianceInput) {
       code: sender.reason ?? "invalid_sender",
       severity: "error",
       message: "From email must use a configured Cloudflare sending domain."
-    });
-  }
-
-  if (!input.organizationAddress?.trim()) {
-    findings.push({
-      code: "missing_organization_address",
-      severity: "error",
-      message: "Marketing emails must include your organization contact address."
     });
   }
 

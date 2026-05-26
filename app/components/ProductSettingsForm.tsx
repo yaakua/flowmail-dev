@@ -126,9 +126,9 @@ export const help: Record<string, HelpTipProps> = {
   },
   productSettings: {
     title: "Product profile",
-    summary: "Product identity and compliance details live here. Sender addresses are managed by the Cloudflare Email config above.",
-    steps: ["Fill product identity.", "Add a real organization address.", "Save before sending a test email."],
-    example: "My SaaS, Acme Inc, 123 Market St"
+    summary: "Optional identity details live here. Sender addresses are managed by the Cloudflare Email config above.",
+    steps: ["Fill the fields that apply to this sender.", "Save before sending a test email."],
+    example: "My project"
   },
   productName: {
     title: "Product name",
@@ -144,8 +144,8 @@ export const help: Record<string, HelpTipProps> = {
   },
   organizationAddress: {
     title: "Organization address",
-    summary: "Required for compliant marketing/lifecycle emails and inserted into the email footer.",
-    steps: ["Use your real business or organization mailing address.", "This should be visible to recipients.", "Campaign approval is blocked if this is empty."],
+    summary: "Optional mailing address for teams that need to keep it on file.",
+    steps: ["Leave this empty when the sender does not have an organization address.", "Flowmail does not insert it into campaign footers."],
     example: "Acme Inc, 123 Market St, San Francisco, CA 94105, USA"
   },
   brandVoice: {

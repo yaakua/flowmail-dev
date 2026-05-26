@@ -9,7 +9,6 @@ describe("compliance checks", () => {
       subject: "Activation help",
       htmlBody: "<p>Hello</p>",
       textBody: "Hello",
-      organizationAddress: "",
       totalRecipients: 1,
       suppressedRecipients: 0,
       consentlessRecipients: 1
@@ -25,7 +24,6 @@ describe("compliance checks", () => {
       subject: "Activation help",
       htmlBody: "<p>Hello</p>",
       textBody: "Hello",
-      organizationAddress: "123 Market St",
       totalRecipients: 1,
       suppressedRecipients: 0,
       consentlessRecipients: 0

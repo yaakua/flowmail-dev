@@ -7,7 +7,6 @@ Flowmail is built for permission-based lifecycle email, not cold email or purcha
 Before a campaign is queued:
 
 - From email must use a configured sending domain.
-- Organization contact address must be present.
 - Template must include unsubscribe text or `{{unsubscribe_url}}`.
 - Audience must contain at least one eligible recipient.
 - Suppressed, bounced, and unsubscribed contacts are excluded.

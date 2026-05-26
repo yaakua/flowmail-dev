@@ -13,6 +13,10 @@ export default function CampaignDetail() {
   const [preview, setPreview] = useState<any>(null);
   const [batchSize, setBatchSize] = useState(50);
   const [message, setMessage] = useState("");
+  const [testModalOpen, setTestModalOpen] = useState(false);
+  const [testRecipients, setTestRecipients] = useState("");
+  const [testError, setTestError] = useState("");
+  const [testBusy, setTestBusy] = useState(false);
 
   async function load() {
     const [nextData, nextPreview] = await Promise.all([
@@ -45,6 +49,40 @@ export default function CampaignDetail() {
     await load();
   }
 
+  async function sendCampaignTestEmail() {
+    const parsedRecipients = parseRecipientInput(testRecipients);
+    if (parsedRecipients.valid.length === 0) {
+      setTestError(t(locale, "campaignTestRecipientsRequired"));
+      return;
+    }
+    if (parsedRecipients.invalid.length > 0) {
+      setTestError(t(locale, "campaignTestInvalidRecipients", { emails: parsedRecipients.invalid.join(", ") }));
+      return;
+    }
+
+    setTestBusy(true);
+    setTestError("");
+    try {
+      const result = await api<{ count: number; sent: Array<{ to: string; messageId?: string }> }>(`/api/v1/campaigns/${params.campaignId}/test-email`, {
+        method: "POST",
+        body: JSON.stringify({
+          recipients: parsedRecipients.valid,
+          subject: data.template.subject,
+          html_body: data.template.html_body,
+          text_body: htmlToText(data.template.html_body)
+        })
+      });
+      setMessage(t(locale, "campaignTestEmailSent", { count: result.count, recipients: result.sent.map((item) => item.to).join(", ") }));
+      setTestModalOpen(false);
+      setTestRecipients("");
+      await load();
+    } catch (error) {
+      setTestError(error instanceof Error ? error.message : t(locale, "campaignTestEmailFailed"));
+    } finally {
+      setTestBusy(false);
+    }
+  }
+
   if (!data) return <AppShell><p className="muted">{t(locale, "loading")}</p></AppShell>;
   const { campaign, template } = data;
   const variables = templateVariablesForDisplay(template.variables_json);
@@ -55,7 +93,6 @@ export default function CampaignDetail() {
   const previewSubject = renderTemplate(template.subject, previewValues);
   const previewHtml = appendComplianceFooter(
     renderTemplate(template.html_body, previewValues),
-    data.product?.organization_address || "Organization address preview",
     previewValues.unsubscribe_url
   );
 
@@ -68,6 +105,10 @@ export default function CampaignDetail() {
           <p>{t(locale, "templateLibraryLead")}</p>
         </div>
         <div className="row-actions flush">
+          <button className="secondary-button" onClick={() => {
+            setTestError("");
+            setTestModalOpen(true);
+          }}>{t(locale, "testCampaignEmail")}</button>
           <button className="secondary-button" onClick={saveTemplate}>{t(locale, "saveDraft")}</button>
         </div>
       </section>
@@ -127,6 +168,36 @@ export default function CampaignDetail() {
           </section>
         </div>
       </section>
+      {testModalOpen ? (
+        <div className="modal-backdrop">
+          <div className="modal campaign-test-modal" role="dialog" aria-modal="true" aria-labelledby="campaign-test-title">
+            <div className="modal-title-row">
+              <h2 id="campaign-test-title">{t(locale, "testCampaignEmail")}</h2>
+              <button className="icon-button" aria-label={t(locale, "close")} onClick={() => setTestModalOpen(false)}>&times;</button>
+            </div>
+            <p className="muted">{t(locale, "campaignTestEmailBody")}</p>
+            <form onSubmit={(event) => {
+              event.preventDefault();
+              void sendCampaignTestEmail();
+            }}>
+              <label htmlFor="campaign-test-recipients">{t(locale, "testRecipients")}</label>
+              <textarea
+                id="campaign-test-recipients"
+                className="campaign-test-input"
+                placeholder="you@example.com, teammate@example.com"
+                value={testRecipients}
+                onChange={(event) => setTestRecipients(event.target.value)}
+              />
+              <span className="field-note">{t(locale, "campaignTestRecipientsHelp")}</span>
+              {testError ? <p className="form-status error" role="alert">{testError}</p> : null}
+              <div className="row-actions">
+                <button type="button" className="secondary-button" onClick={() => setTestModalOpen(false)}>{t(locale, "cancel")}</button>
+                <button disabled={testBusy}>{testBusy ? t(locale, "sendingTestEmail") : t(locale, "sendTestEmail")}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
     </AppShell>
   );
 }
@@ -149,4 +220,25 @@ function buildPreviewValues(contact: any, productName: string | null | undefined
     company: contact?.company ?? productName ?? "",
     unsubscribe_url: `${origin}/unsubscribe/preview`
   };
+}
+
+function parseRecipientInput(input: string) {
+  const seen = new Set<string>();
+  const valid: string[] = [];
+  const invalid: string[] = [];
+  input
+    .split(/[\s,;，；]+/)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean)
+    .forEach((email) => {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        invalid.push(email);
+        return;
+      }
+      if (!seen.has(email)) {
+        seen.add(email);
+        valid.push(email);
+      }
+    });
+  return { valid, invalid };
 }

@@ -7,6 +7,7 @@ import {
   appendComplianceFooter,
   appendTextFooter,
   htmlToText,
+  isValidEmail,
   normalizeEmail,
   parseCsvContacts,
   renderTemplate,
@@ -630,8 +631,8 @@ app.get("/api/v1/campaigns/:id/preview-contact", async (c) => {
     contact,
     rendered: {
       subject: renderTemplate(template.subject, values),
-      html: appendComplianceFooter(renderedHtml, product.organization_address || "Organization address preview", values.unsubscribe_url),
-      text: appendTextFooter(renderedText, product.organization_address || "Organization address preview", values.unsubscribe_url)
+      html: appendComplianceFooter(renderedHtml, values.unsubscribe_url),
+      text: appendTextFooter(renderedText, values.unsubscribe_url)
     }
   });
 });
@@ -649,7 +650,6 @@ app.get("/api/v1/campaigns/:id/compliance", async (c) => {
     subject: template.subject,
     htmlBody: template.html_body,
     textBody: template.text_body,
-    organizationAddress: product.organization_address,
     totalRecipients: audience.eligible.length,
     suppressedRecipients: audience.suppressedCount,
     consentlessRecipients: audience.consentlessCount
@@ -685,6 +685,30 @@ app.put("/api/v1/campaigns/:id/template", async (c) => {
   await c.env.DB.prepare("UPDATE templates SET subject = ?, html_body = ?, text_body = ?, updated_at = ? WHERE id = ?")
     .bind(body.subject, body.html_body, textBody, now, campaign.template_id).run();
   return c.json({ campaign, template: await getTemplate(c.env.DB, campaign.template_id) });
+});
+
+app.post("/api/v1/campaigns/:id/test-email", async (c) => {
+  const body = z.object({
+    recipients: z.array(z.string()).min(1).max(10),
+    subject: z.string().min(1).optional(),
+    html_body: z.string().min(1).optional(),
+    text_body: z.string().optional()
+  }).parse(await c.req.json());
+  const campaign = await getCampaign(c.env.DB, c.req.param("id"));
+  if (!campaign) return c.json({ error: "Not found" }, 404);
+
+  const recipients = normalizeTestRecipients(body.recipients);
+  if (recipients.invalid.length > 0) {
+    return c.json({ error: `Invalid test recipient: ${recipients.invalid.join(", ")}` }, 422);
+  }
+  const result = await sendCampaignTestEmails(c.env, campaign, {
+    recipients: recipients.valid,
+    subject: body.subject,
+    htmlBody: body.html_body,
+    textBody: body.text_body
+  });
+  if (!result.ok) return c.json(result, result.statusCode);
+  return c.json(result);
 });
 
 app.post("/api/v1/campaigns/:id/send-preview", async (c) => {
@@ -973,8 +997,8 @@ async function processSendJob(env: Env, job: SendJob) {
   const subject = renderTemplate(template.subject, values);
   const renderedHtml = renderTemplate(template.html_body, values);
   const renderedText = renderTemplate(template.text_body, values);
-  const html = appendComplianceFooter(await rewriteHtmlLinks(renderedHtml, linkSigner), product.organization_address, unsubscribeUrl);
-  const text = appendTextFooter(renderedText, product.organization_address, unsubscribeUrl);
+  const html = appendComplianceFooter(await rewriteHtmlLinks(renderedHtml, linkSigner), unsubscribeUrl);
+  const text = appendTextFooter(renderedText, unsubscribeUrl);
   const sendRecordId = crypto.randomUUID();
   await writeContactEmailSend(env.DB, {
     id: sendRecordId,
@@ -1237,7 +1261,6 @@ async function prepareCampaignSend(env: Env, campaign: Campaign, options: { limi
     subject: template.subject,
     htmlBody: template.html_body,
     textBody: template.text_body,
-    organizationAddress: product.organization_address,
     totalRecipients: selectedContacts.length,
     suppressedRecipients: audience.suppressedCount,
     consentlessRecipients: audience.consentlessCount
@@ -1302,6 +1325,62 @@ async function createCampaignSendRun(env: Env, campaign: Campaign, options: { li
   };
 }
 
+async function sendCampaignTestEmails(env: Env, campaign: Campaign, input: {
+  recipients: string[];
+  subject?: string;
+  htmlBody?: string;
+  textBody?: string;
+}) {
+  const [product, template, publicAppUrl] = await Promise.all([
+    getProduct(env.DB),
+    getTemplate(env.DB, campaign.template_id),
+    getPublicAppUrl(env.DB, env)
+  ]);
+  if (!template) return { ok: false as const, statusCode: 404 as const, error: "Template missing." };
+
+  const sender = validateSenderDomain(product.default_from_email, allowedSenderDomains(env, product));
+  if (!sender.ok) return { ok: false as const, statusCode: 422 as const, error: "Save a Cloudflare Email config before sending from this domain." };
+
+  const subjectTemplate = input.subject?.trim() || template.subject;
+  const htmlTemplate = input.htmlBody?.trim() || template.html_body;
+  const textTemplate = input.textBody?.trim() || template.text_body || htmlToText(htmlTemplate);
+  const sent: Array<{ to: string; messageId: string }> = [];
+
+  for (const to of input.recipients) {
+    const values = testRecipientValues(to, product, publicAppUrl);
+    const subject = renderTemplate(subjectTemplate, values);
+    const renderedHtml = renderTemplate(htmlTemplate, values);
+    const renderedText = renderTemplate(textTemplate, values);
+    const html = appendComplianceFooter(renderedHtml, values.unsubscribe_url);
+    const text = appendTextFooter(renderedText || htmlToText(renderedHtml), values.unsubscribe_url);
+    const result = await sendEmail(env.EMAIL, {
+      to,
+      from: { email: product.default_from_email, name: product.name },
+      replyTo: product.reply_to_email || product.default_from_email,
+      subject,
+      html,
+      text,
+      headers: {
+        "X-Flowmail-Campaign": campaign.id,
+        "X-Flowmail-Test": "true"
+      }
+    });
+    sent.push({ to, messageId: result.messageId });
+  }
+
+  await writeEvent(env.DB, {
+    eventType: "test_email",
+    campaignId: campaign.id,
+    metadata: {
+      source: "campaign_test",
+      recipients: sent.map((item) => item.to),
+      messageIds: sent.map((item) => item.messageId)
+    }
+  });
+
+  return { ok: true as const, count: sent.length, sent };
+}
+
 async function retryFailedSendRun(env: Env, sourceRunId: string) {
   const sourceRun = await env.DB.prepare("SELECT * FROM campaign_send_runs WHERE id = ?").bind(sourceRunId).first<CampaignSendRun>();
   if (!sourceRun) return { ok: false as const, statusCode: 404 as const, error: "Send run not found." };
@@ -1344,6 +1423,26 @@ function normalizeBatchLimit(limit: number | undefined, available: number) {
   if (available <= 0) return 0;
   if (!limit) return available;
   return Math.max(1, Math.min(limit, available));
+}
+
+function normalizeTestRecipients(input: string[]) {
+  const valid: string[] = [];
+  const invalid: string[] = [];
+  const seen = new Set<string>();
+  for (const item of input) {
+    const email = normalizeEmail(item);
+    if (!email) continue;
+    if (!isValidEmail(email)) {
+      invalid.push(item);
+      continue;
+    }
+    if (!seen.has(email)) {
+      seen.add(email);
+      valid.push(email);
+    }
+  }
+  if (valid.length === 0 && invalid.length === 0) invalid.push("empty");
+  return { valid, invalid };
 }
 
 async function getCampaignSendRuns(db: D1Database, campaignId?: string, limit = 20) {
@@ -1536,6 +1635,24 @@ function contactValues(contact: Contact): Record<string, string> {
     full_name: fullName || contact.first_name || contact.email,
     company: contact.company ?? ""
   };
+}
+
+function testRecipientValues(email: string, product: Product, publicAppUrl: string): Record<string, string> {
+  const localPart = email.split("@")[0] || "test";
+  const firstName = titleCase(localPart.split(/[._-]+/).filter(Boolean)[0] || "test");
+  const fullName = `${firstName} Recipient`;
+  return {
+    email,
+    first_name: firstName,
+    last_name: "Recipient",
+    full_name: fullName,
+    company: product.name,
+    unsubscribe_url: `${publicAppUrl}/unsubscribe/preview`
+  };
+}
+
+function titleCase(value: string) {
+  return value ? `${value.slice(0, 1).toUpperCase()}${value.slice(1)}` : "";
 }
 
 async function rewriteHtmlLinks(html: string, signer: (url: string) => Promise<string>) {
