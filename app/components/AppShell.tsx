@@ -1,5 +1,6 @@
 import { Link, useLocation, useParams } from "react-router";
 import { normalizeLocale, t, type Locale } from "../i18n";
+import { BrandMark } from "./BrandLogo";
 
 export function useLocale() {
   const params = useParams();
@@ -19,6 +20,7 @@ export function AppShell({ children, aside }: { children: React.ReactNode; aside
     { label: t(locale, "campaigns"), path: "/campaigns" },
     { label: t(locale, "contacts"), path: "/contacts" },
     { label: t(locale, "sendRecords"), path: "/send-tasks" },
+    { label: t(locale, "clickAnalytics"), path: "/clicks" },
     { label: t(locale, "inbox"), path: "/inbox" },
     { label: t(locale, "settings"), path: "/settings" }
   ];
@@ -27,7 +29,7 @@ export function AppShell({ children, aside }: { children: React.ReactNode; aside
       <a className="skip-link" href="#main-content">{t(locale, "skipToWorkspace")}</a>
       <aside className="sidebar">
         <Link className="brand" to={localizedPath(locale, "/campaigns")}>
-          <span className="brand-mark">F</span>
+          <span className="brand-mark"><BrandMark /></span>
           <span>
             <strong>Flowmail</strong>
             <small>{t(locale, "brandSubtitle")}</small>

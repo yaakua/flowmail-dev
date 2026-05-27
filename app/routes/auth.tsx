@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
+import { BrandMark } from "../components/BrandLogo";
 import { api } from "../lib/api";
 
 export default function Auth() {
@@ -23,7 +24,7 @@ export default function Auth() {
   return (
     <main className="auth-screen">
       <section className="auth-card">
-        <div className="brand large"><span className="brand-mark">F</span><span>Flowmail</span></div>
+        <div className="brand large"><span className="brand-mark"><BrandMark /></span><span>Flowmail</span></div>
         <h1>Sign in to Flowmail</h1>
         <p>Default username is admin and default password is flowmail-admin.</p>
         <input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="admin" />

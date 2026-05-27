@@ -59,7 +59,13 @@ export default function Settings() {
           <section className="panel">
             <CloudflareEmailConfigPanel product={product} mode="settings" onChanged={load} />
           </section>
-          <section className="panel">
+          <section className="panel product-profile-panel">
+            <div className="panel-title-row product-profile-title">
+              <div>
+                <h2>{t(locale, "productProfileTitle")}</h2>
+                <p className="muted">{t(locale, "productProfileLead")}</p>
+              </div>
+            </div>
             <ProductSettingsForm locale={locale} product={product} setProduct={setProduct} onSave={saveProduct} message={message} />
           </section>
         </>

@@ -15,6 +15,7 @@ function appRoutes(prefix = "") {
   route("campaigns/:campaignId/preview", "routes/campaign-preview.tsx", { id: `${prefix}campaign-preview` }),
   route("campaigns/:campaignId/send", "routes/campaign-send.tsx", { id: `${prefix}campaign-send` }),
   route("send-tasks", "routes/send-tasks.tsx", { id: `${prefix}send-tasks` }),
+  route("clicks", "routes/clicks.tsx", { id: `${prefix}clicks` }),
   route("inbox", "routes/inbox.tsx", { id: `${prefix}inbox` }),
   route("inbox/analysis", "routes/reply-analysis.tsx", { id: `${prefix}reply-analysis` }),
   route("inbox/:messageId", "routes/reply-detail.tsx", { id: `${prefix}reply-detail` }),

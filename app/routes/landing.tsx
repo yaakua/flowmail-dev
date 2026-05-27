@@ -1,11 +1,12 @@
 import { Link } from "react-router";
+import { BrandMark } from "../components/BrandLogo";
 
 export default function Landing() {
   return (
     <main className="landing">
       <section className="landing-hero">
         <div>
-          <div className="brand large"><span className="brand-mark">F</span><span>Flowmail</span></div>
+          <div className="brand large"><span className="brand-mark"><BrandMark /></span><span>Flowmail</span></div>
           <h1>Open-source lifecycle email, running on your Cloudflare account.</h1>
           <p>Import contacts, draft a lifecycle email, approve a limited send, and handle replies with Agent-assisted drafts.</p>
           <div className="row-actions">

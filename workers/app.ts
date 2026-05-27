@@ -605,6 +605,87 @@ app.get("/api/v1/dashboard/summary", async (c) => {
   });
 });
 
+app.get("/api/v1/clicks", async (c) => {
+  const campaignId = c.req.query("campaignId");
+  const whereClause = campaignId ? "WHERE e.event_type = 'click' AND e.campaign_id = ?" : "WHERE e.event_type = 'click'";
+  const bindCampaign = <T extends D1PreparedStatement>(statement: T) => campaignId ? statement.bind(campaignId) : statement;
+
+  const [summary, byCampaign, topUrls, recent, campaigns] = await Promise.all([
+    bindCampaign(c.env.DB.prepare(
+      `SELECT
+        COUNT(*) as total_clicks,
+        COUNT(DISTINCT COALESCE(e.contact_id, json_extract(e.metadata_json, '$.email'))) as unique_contacts,
+        COUNT(DISTINCT e.campaign_id) as campaign_count,
+        MAX(e.event_time) as last_click_at
+       FROM email_events e
+       ${whereClause}`
+    )).first(),
+    bindCampaign(c.env.DB.prepare(
+      `SELECT
+        e.campaign_id,
+        campaigns.name as campaign_name,
+        COUNT(*) as click_count,
+        COUNT(DISTINCT COALESCE(e.contact_id, json_extract(e.metadata_json, '$.email'))) as unique_contacts,
+        MAX(e.event_time) as last_click_at
+       FROM email_events e
+       LEFT JOIN campaigns ON campaigns.id = e.campaign_id
+       ${whereClause}
+       GROUP BY e.campaign_id, campaigns.name
+       ORDER BY click_count DESC, last_click_at DESC
+       LIMIT 20`
+    )).all(),
+    bindCampaign(c.env.DB.prepare(
+      `SELECT
+        COALESCE(json_extract(e.metadata_json, '$.url'), '') as url,
+        COUNT(*) as click_count,
+        COUNT(DISTINCT COALESCE(e.contact_id, json_extract(e.metadata_json, '$.email'))) as unique_contacts,
+        MAX(e.event_time) as last_click_at
+       FROM email_events e
+       ${whereClause}
+       GROUP BY url
+       HAVING url != ''
+       ORDER BY click_count DESC, last_click_at DESC
+       LIMIT 20`
+    )).all(),
+    bindCampaign(c.env.DB.prepare(
+      `SELECT
+        e.id,
+        e.campaign_id,
+        e.recipient_id,
+        e.contact_id,
+        e.event_time,
+        e.metadata_json,
+        campaigns.name as campaign_name,
+        contacts.email as contact_email,
+        contacts.first_name,
+        contacts.last_name,
+        contacts.company
+       FROM email_events e
+       LEFT JOIN campaigns ON campaigns.id = e.campaign_id
+       LEFT JOIN contacts ON contacts.id = e.contact_id
+       ${whereClause}
+       ORDER BY e.event_time DESC
+       LIMIT 200`
+    )).all(),
+    c.env.DB.prepare(
+      `SELECT campaigns.id, campaigns.name, COUNT(e.id) as click_count, MAX(e.event_time) as last_click_at
+       FROM email_events e
+       JOIN campaigns ON campaigns.id = e.campaign_id
+       WHERE e.event_type = 'click'
+       GROUP BY campaigns.id, campaigns.name
+       ORDER BY last_click_at DESC`
+    ).all()
+  ]);
+
+  return c.json({
+    summary: summary ?? { total_clicks: 0, unique_contacts: 0, campaign_count: 0, last_click_at: null },
+    byCampaign: byCampaign.results ?? [],
+    topUrls: topUrls.results ?? [],
+    recent: recent.results ?? [],
+    campaigns: campaigns.results ?? []
+  });
+});
+
 app.get("/api/v1/campaigns/:id", async (c) => {
   const campaign = await c.env.DB.prepare("SELECT * FROM campaigns WHERE id = ?").bind(c.req.param("id")).first<Campaign>();
   if (!campaign) return c.json({ error: "Not found" }, 404);

@@ -189,6 +189,30 @@ textarea {
   box-shadow: inset 0 1px 0 oklch(20% 0.018 118 / 0.025);
 }
 
+select {
+  appearance: none;
+  background-color: var(--surface-raised);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--ink-soft) 50%),
+    linear-gradient(135deg, var(--ink-soft) 50%, transparent 50%);
+  background-position:
+    calc(100% - 1.05rem) calc(50% - 0.12rem),
+    calc(100% - 0.78rem) calc(50% - 0.12rem);
+  background-repeat: no-repeat;
+  background-size: 0.34rem 0.34rem, 0.34rem 0.34rem;
+  padding-right: 2.35rem;
+}
+
+select option {
+  background: var(--surface-raised);
+  color: var(--ink);
+}
+
+select option:checked {
+  background: var(--primary-quiet);
+  color: var(--ink);
+}
+
 input:hover,
 select:hover,
 textarea:hover {
@@ -306,12 +330,42 @@ pre {
   width: 2rem;
   height: 2rem;
   border: 1px solid oklch(77% 0.04 154);
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: var(--primary-soft);
   color: var(--primary);
-  font-family: var(--font-data);
-  font-size: var(--text-sm);
-  font-weight: 700;
+}
+
+.brand-mark-icon {
+  width: 1.45rem;
+  height: 1.45rem;
+  overflow: visible;
+}
+
+.brand-mark-frame,
+.brand-mark-fold,
+.brand-mark-ledger,
+.brand-mark-route {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.brand-mark-frame {
+  stroke-width: 4.4;
+}
+
+.brand-mark-fold {
+  stroke-width: 3.2;
+}
+
+.brand-mark-ledger,
+.brand-mark-route {
+  stroke-width: 2.8;
+}
+
+.brand-mark-signal {
+  fill: var(--copper);
 }
 
 .create-campaign-link {
@@ -1261,6 +1315,23 @@ input[readonly] {
   margin: 0;
 }
 
+.product-profile-panel {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.product-profile-title {
+  align-items: flex-start;
+  border-bottom: 1px solid var(--line-soft);
+  padding-bottom: var(--space-sm);
+}
+
+.product-profile-title p {
+  max-width: 64ch;
+  margin: var(--space-2xs) 0 0;
+  line-height: 1.5;
+}
+
 .contact-table {
   min-width: 62rem;
 }
@@ -1540,6 +1611,52 @@ input[readonly] {
 .send-task-table {
   min-width: 0;
   table-layout: fixed;
+}
+
+.click-table {
+  min-width: 46rem;
+  table-layout: fixed;
+}
+
+.click-table th:nth-child(1),
+.click-table td:nth-child(1) {
+  width: 46%;
+}
+
+.click-table th:nth-child(2),
+.click-table td:nth-child(2),
+.click-table th:nth-child(3),
+.click-table td:nth-child(3) {
+  width: 15%;
+}
+
+.click-table th:nth-child(4),
+.click-table td:nth-child(4) {
+  width: 24%;
+}
+
+.recent-click-table th:nth-child(1),
+.recent-click-table td:nth-child(1) {
+  width: 25%;
+}
+
+.recent-click-table th:nth-child(2),
+.recent-click-table td:nth-child(2) {
+  width: 25%;
+}
+
+.recent-click-table th:nth-child(3),
+.recent-click-table td:nth-child(3) {
+  width: 32%;
+}
+
+.recent-click-table th:nth-child(4),
+.recent-click-table td:nth-child(4) {
+  width: 18%;
+}
+
+.click-table td {
+  overflow-wrap: anywhere;
 }
 
 .send-task-table th:nth-child(1),

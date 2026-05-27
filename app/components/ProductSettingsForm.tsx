@@ -28,25 +28,25 @@ export function ProductSettingsForm({
 }) {
   const fields = compact ? (
     <>
-      <Field label="Product name" help={help.productName}>
+      <Field label={t(locale, "productName")} help={help.productName}>
         <input value={product.name} onChange={(event) => setProduct({ ...product, name: event.target.value })} placeholder="My SaaS" />
       </Field>
-      <Field label="Organization address" help={help.organizationAddress} wide>
+      <Field label={t(locale, "organizationAddress")} help={help.organizationAddress} wide>
         <textarea value={product.organization_address} onChange={(event) => setProduct({ ...product, organization_address: event.target.value })} placeholder="Acme Inc, 123 Market St, San Francisco, CA 94105, USA" />
       </Field>
     </>
   ) : (
     <>
-      <Field label="Product name" help={help.productName}>
+      <Field label={t(locale, "productName")} help={help.productName}>
         <input value={product.name} onChange={(event) => setProduct({ ...product, name: event.target.value })} placeholder="My SaaS" />
       </Field>
-      <Field label="Product URL" help={help.productUrl}>
+      <Field label={t(locale, "productUrl")} help={help.productUrl}>
         <input value={product.url} onChange={(event) => setProduct({ ...product, url: event.target.value })} placeholder="https://app.example.com" />
       </Field>
-      <Field label="Organization address" help={help.organizationAddress} wide>
+      <Field label={t(locale, "organizationAddress")} help={help.organizationAddress} wide>
         <textarea value={product.organization_address} onChange={(event) => setProduct({ ...product, organization_address: event.target.value })} placeholder="Acme Inc, 123 Market St, San Francisco, CA 94105, USA" />
       </Field>
-      <Field label="Brand voice" help={help.brandVoice} wide>
+      <Field label={t(locale, "brandVoice")} help={help.brandVoice} wide>
         <textarea value={product.brand_voice} onChange={(event) => setProduct({ ...product, brand_voice: event.target.value })} placeholder="Clear, concise, technical, founder-to-founder." />
       </Field>
     </>
