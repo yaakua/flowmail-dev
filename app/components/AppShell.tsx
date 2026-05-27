@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Link, useLocation, useParams } from "react-router";
 import { normalizeLocale, t, type Locale } from "../i18n";
 import { BrandMark } from "./BrandLogo";
@@ -16,13 +17,15 @@ export function AppShell({ children, aside }: { children: React.ReactNode; aside
   const locale = useLocale();
   const location = useLocation();
   const currentPath = stripLocale(location.pathname);
+  const unreadInboxCount = useUnreadInboxCount(location.pathname);
   const nav = [
     { label: t(locale, "campaigns"), path: "/campaigns" },
     { label: t(locale, "contacts"), path: "/contacts" },
     { label: t(locale, "sendRecords"), path: "/send-tasks" },
     { label: t(locale, "clickAnalytics"), path: "/clicks" },
-    { label: t(locale, "inbox"), path: "/inbox" },
-    { label: t(locale, "settings"), path: "/settings" }
+    { label: t(locale, "inbox"), path: "/inbox", badge: unreadInboxCount },
+    { label: t(locale, "emailSettings"), path: "/settings" },
+    { label: t(locale, "productSettings"), path: "/product-settings" }
   ];
   return (
     <div className={aside ? "app-shell" : "app-shell app-shell-no-inspector"}>
@@ -44,6 +47,7 @@ export function AppShell({ children, aside }: { children: React.ReactNode; aside
               to={localizedPath(locale, item.path)}
             >
               <span>{item.label}</span>
+              {item.badge ? <strong className="nav-badge" aria-label={t(locale, "unreadCount", { count: item.badge })}>{formatBadgeCount(item.badge)}</strong> : null}
             </Link>
           ))}
         </nav>
@@ -78,4 +82,35 @@ function stripLocale(pathname: string) {
 
 function isActive(currentPath: string, navPath: string) {
   return currentPath === navPath || currentPath.startsWith(`${navPath}/`);
+}
+
+function useUnreadInboxCount(pathname: string) {
+  const [count, setCount] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const response = await fetch("/api/v1/inbox/unread-count");
+        if (!response.ok) return;
+        const data = await response.json() as { count?: number };
+        if (!cancelled) setCount(Number(data.count ?? 0));
+      } catch {
+        if (!cancelled) setCount(0);
+      }
+    }
+
+    void load();
+    const timer = window.setInterval(load, 30000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [pathname]);
+
+  return count;
+}
+
+function formatBadgeCount(count: number) {
+  return count > 99 ? "99+" : String(count);
 }

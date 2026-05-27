@@ -845,6 +845,20 @@ app.post("/api/v1/send-runs/:id/retry", async (c) => {
   return c.json(result);
 });
 
+app.get("/api/v1/inbox/unread-count", async (c) => {
+  const row = await c.env.DB.prepare(
+    `SELECT COUNT(*) as count
+     FROM inbound_messages m
+     WHERE NOT EXISTS (
+       SELECT 1
+       FROM email_events e
+       WHERE json_extract(e.metadata_json, '$.inboundId') = m.id
+         AND e.event_type IN ('reply_resolved', 'reply_needs_reply', 'reply_archived', 'reply_unsubscribed', 'manual_reply_sent', 'agent_reply_sent')
+     )`
+  ).first<{ count: number }>();
+  return c.json({ count: row?.count ?? 0 });
+});
+
 app.get("/api/v1/inbox", async (c) => {
   const messages = await c.env.DB.prepare(
     `SELECT inbound_messages.*, contacts.email as contact_email

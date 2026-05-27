@@ -7,6 +7,7 @@ function appRoutes(prefix = "") {
   route("landing", "routes/landing.tsx", { id: `${prefix}landing` }),
   route("setup", "routes/setup.tsx", { id: `${prefix}setup` }),
   route("settings", "routes/settings.tsx", { id: `${prefix}settings` }),
+  route("product-settings", "routes/product-settings.tsx", { id: `${prefix}product-settings` }),
   route("contacts", "routes/contacts.tsx", { id: `${prefix}contacts` }),
   route("contacts/import", "routes/contacts-import.tsx", { id: `${prefix}contacts-import` }),
   route("contacts/:contactId", "routes/contact-detail.tsx", { id: `${prefix}contact-detail` }),
