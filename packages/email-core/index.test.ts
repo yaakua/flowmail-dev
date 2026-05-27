@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appendComplianceFooter, appendTextFooter, htmlToText, parseCsvContacts, renderTemplate, signToken, verifyToken, validateSenderDomain } from "./index";
+import { appendComplianceFooter, appendTextFooter, htmlToText, parseCsvContacts, renderTemplate, rewriteLinksAsync, signToken, verifyToken, validateSenderDomain } from "./index";
 
 describe("email core", () => {
   it("parses contacts, skips invalid rows, and dedupes emails", () => {
@@ -63,6 +63,15 @@ describe("email core", () => {
   it("appends the same neutral unsubscribe context to text emails", () => {
     expect(appendTextFooter("Hi Ada", "https://app.example/unsubscribe")).toBe(
       "Hi Ada\n\n--\nIf you do not want to receive emails like this, unsubscribe: https://app.example/unsubscribe"
+    );
+  });
+
+  it("rewrites HTML hrefs with async tracking links", async () => {
+    await expect(rewriteLinksAsync(
+      '<a href="https://example.com?a=1&b=2">One</a><a href=\'https://second.example\'>Two</a>',
+      async (url) => `https://app.example/click/${encodeURIComponent(url)}`
+    )).resolves.toBe(
+      '<a href="https://app.example/click/https%3A%2F%2Fexample.com%3Fa%3D1%26b%3D2">One</a><a href=\'https://app.example/click/https%3A%2F%2Fsecond.example\'>Two</a>'
     );
   });
 

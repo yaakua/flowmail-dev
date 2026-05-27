@@ -14,6 +14,7 @@ export default function CampaignDetail() {
   const [batchSize, setBatchSize] = useState(50);
   const [message, setMessage] = useState("");
   const [testModalOpen, setTestModalOpen] = useState(false);
+  const [testFullName, setTestFullName] = useState("Preview Contact");
   const [testRecipients, setTestRecipients] = useState("");
   const [testError, setTestError] = useState("");
   const [testBusy, setTestBusy] = useState(false);
@@ -51,6 +52,11 @@ export default function CampaignDetail() {
 
   async function sendCampaignTestEmail() {
     const parsedRecipients = parseRecipientInput(testRecipients);
+    const fullName = testFullName.trim();
+    if (!fullName) {
+      setTestError(t(locale, "campaignTestFullNameRequired"));
+      return;
+    }
     if (parsedRecipients.valid.length === 0) {
       setTestError(t(locale, "campaignTestRecipientsRequired"));
       return;
@@ -67,6 +73,7 @@ export default function CampaignDetail() {
         method: "POST",
         body: JSON.stringify({
           recipients: parsedRecipients.valid,
+          full_name: fullName,
           subject: data.template.subject,
           html_body: data.template.html_body,
           text_body: htmlToText(data.template.html_body)
@@ -74,6 +81,7 @@ export default function CampaignDetail() {
       });
       setMessage(t(locale, "campaignTestEmailSent", { count: result.count, recipients: result.sent.map((item) => item.to).join(", ") }));
       setTestModalOpen(false);
+      setTestFullName(fullName);
       setTestRecipients("");
       await load();
     } catch (error) {
@@ -90,8 +98,8 @@ export default function CampaignDetail() {
   const selectedBatchSize = availableRecipients > 0 ? clampBatchSize(batchSize, availableRecipients) : 1;
   const sendPath = `send?limit=${selectedBatchSize}`;
   const previewValues = buildPreviewValues(preview?.contact, data.product?.name);
-  const previewSubject = renderTemplate(template.subject, previewValues);
-  const previewHtml = appendComplianceFooter(
+  const previewSubject = preview?.rendered?.subject ?? renderTemplate(template.subject, previewValues);
+  const previewHtml = preview?.rendered?.html ?? appendComplianceFooter(
     renderTemplate(template.html_body, previewValues),
     previewValues.unsubscribe_url
   );
@@ -131,7 +139,7 @@ export default function CampaignDetail() {
               <textarea className="email-editor" value={template.html_body} onChange={(event) => setData({ ...data, template: { ...template, html_body: event.target.value } })} />
             </div>
           </div>
-          {message ? <p className="muted">{message}</p> : null}
+          {message ? <p className="form-status ok" role="status">{message}</p> : null}
         </div>
         <div className="stack">
           <section className="panel batch-builder-panel">
@@ -180,6 +188,13 @@ export default function CampaignDetail() {
               event.preventDefault();
               void sendCampaignTestEmail();
             }}>
+              <label htmlFor="campaign-test-full-name">{t(locale, "testFullName")}</label>
+              <input
+                id="campaign-test-full-name"
+                placeholder="Ada Lovelace"
+                value={testFullName}
+                onChange={(event) => setTestFullName(event.target.value)}
+              />
               <label htmlFor="campaign-test-recipients">{t(locale, "testRecipients")}</label>
               <textarea
                 id="campaign-test-recipients"

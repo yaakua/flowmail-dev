@@ -223,6 +223,18 @@ export function rewriteLinks(html: string, signer: (url: string) => string) {
   });
 }
 
+export async function rewriteLinksAsync(html: string, signer: (url: string) => Promise<string>) {
+  const links = Array.from(html.matchAll(/href=(["'])(https?:\/\/[^"']+)\1/gi));
+  let rewritten = html;
+  for (const link of links) {
+    const original = link[0];
+    const quote = link[1];
+    const url = link[2];
+    rewritten = rewritten.replace(original, `href=${quote}${escapeAttribute(await signer(url))}${quote}`);
+  }
+  return rewritten;
+}
+
 function stripTags(value: string) {
   return value.replace(/<[^>]+>/g, "").trim();
 }

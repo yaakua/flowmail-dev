@@ -11,6 +11,7 @@ import {
   normalizeEmail,
   parseCsvContacts,
   renderTemplate,
+  rewriteLinksAsync,
   signToken,
   validateSenderDomain,
   verifyToken
@@ -78,25 +79,36 @@ app.post("/api/public/auth/session", async (c) => {
 });
 
 app.get("/click/:token", async (c) => {
-  const payload = await verifyToken(c.req.param("token") ?? "", await getTrackingSecret(c.env.DB, c.env));
+  const payload = await verifyTrackingToken(c.env, c.req.param("token") ?? "");
+  if (!payload) return c.text("Invalid click token", 400);
   if (payload.type !== "click" || !payload.url) return c.text("Invalid click token", 400);
   await writeEvent(c.env.DB, {
     eventType: "click",
     campaignId: payload.campaignId,
     recipientId: payload.recipientId,
     contactId: payload.contactId,
-    metadata: { url: payload.url, userAgent: c.req.header("user-agent") ?? "" }
+    metadata: { url: payload.url, email: payload.email, userAgent: c.req.header("user-agent") ?? "" }
   });
   return c.redirect(payload.url, 302);
 });
 
+app.get("/unsubscribe/preview", (c) => {
+  return c.html(`<!doctype html><html><head><title>Unsubscribe preview</title><style>body{font-family:system-ui;background:#f6f3ee;color:#1f3d2b;display:grid;place-items:center;min-height:100vh}main{max-width:440px}</style></head><body><main><h1>Unsubscribe preview</h1><p>This preview link is working. No contact was unsubscribed.</p></main></body></html>`);
+});
+
+app.post("/unsubscribe/preview", (c) => {
+  return c.html(`<!doctype html><html><head><title>Unsubscribe preview</title><style>body{font-family:system-ui;background:#f6f3ee;color:#1f3d2b;display:grid;place-items:center;min-height:100vh}main{max-width:440px}</style></head><body><main><h1>Preview only</h1><p>No contact was unsubscribed.</p></main></body></html>`);
+});
+
 app.get("/unsubscribe/:token", async (c) => {
-  await verifyToken(c.req.param("token") ?? "", await getTrackingSecret(c.env.DB, c.env));
+  const payload = await verifyTrackingToken(c.env, c.req.param("token") ?? "");
+  if (!payload || payload.type !== "unsubscribe") return c.text("Invalid unsubscribe token", 400);
   return c.html(`<!doctype html><html><head><title>Unsubscribe</title><style>body{font-family:system-ui;background:#f6f3ee;color:#1f3d2b;display:grid;place-items:center;min-height:100vh}main{max-width:440px}button{background:#1f3d2b;color:white;border:0;padding:12px 16px;border-radius:8px}</style></head><body><main><h1>Unsubscribe</h1><p>Confirm that you no longer want lifecycle emails from this sender.</p><form method="post"><button>Confirm unsubscribe</button></form></main></body></html>`);
 });
 
 app.post("/unsubscribe/:token", async (c) => {
-  const payload = await verifyToken(c.req.param("token") ?? "", await getTrackingSecret(c.env.DB, c.env));
+  const payload = await verifyTrackingToken(c.env, c.req.param("token") ?? "");
+  if (!payload) return c.text("Invalid unsubscribe token", 400);
   if (payload.type !== "unsubscribe") return c.text("Invalid unsubscribe token", 400);
   const now = new Date().toISOString();
   const contact = await c.env.DB.prepare("SELECT email FROM contacts WHERE id = ?").bind(payload.contactId).first<{ email: string }>();
@@ -624,14 +636,22 @@ app.get("/api/v1/campaigns/:id/preview-contact", async (c) => {
   const audience = await campaignAudience(c.env.DB);
   const contact = audience.eligible[0] ?? audience.contacts[0] ?? null;
   const values: Record<string, string> = contact ? contactValues(contact) : { first_name: "Preview", last_name: "Contact", full_name: "Preview Contact", company: product.name, email: "preview@example.com" };
-  values.unsubscribe_url = `${requestPublicAppUrl(c.req.url, c.env)}/unsubscribe/preview`;
+  const publicAppUrl = requestPublicAppUrl(c.req.url, c.env);
+  const trackingSecret = await getTrackingSecret(c.env.DB, c.env);
+  values.unsubscribe_url = `${publicAppUrl}/unsubscribe/preview`;
+  const linkSigner = (url: string) => signTrackedClickUrl(publicAppUrl, trackingSecret, {
+    campaignId: campaign.id,
+    contactId: contact?.id,
+    email: values.email,
+    url
+  });
   const renderedHtml = renderTemplate(template.html_body, values);
   const renderedText = renderTemplate(template.text_body, values);
   return c.json({
     contact,
     rendered: {
       subject: renderTemplate(template.subject, values),
-      html: appendComplianceFooter(renderedHtml, values.unsubscribe_url),
+      html: appendComplianceFooter(await rewriteLinksAsync(renderedHtml, linkSigner), values.unsubscribe_url),
       text: appendTextFooter(renderedText, values.unsubscribe_url)
     }
   });
@@ -690,6 +710,7 @@ app.put("/api/v1/campaigns/:id/template", async (c) => {
 app.post("/api/v1/campaigns/:id/test-email", async (c) => {
   const body = z.object({
     recipients: z.array(z.string()).min(1).max(10),
+    full_name: z.string().min(1),
     subject: z.string().min(1).optional(),
     html_body: z.string().min(1).optional(),
     text_body: z.string().optional()
@@ -703,6 +724,7 @@ app.post("/api/v1/campaigns/:id/test-email", async (c) => {
   }
   const result = await sendCampaignTestEmails(c.env, campaign, {
     recipients: recipients.valid,
+    fullName: body.full_name,
     subject: body.subject,
     htmlBody: body.html_body,
     textBody: body.text_body
@@ -990,14 +1012,19 @@ async function processSendJob(env: Env, job: SendJob) {
   const unsubscribeUrl = `${publicAppUrl}/unsubscribe/${unsubscribeToken}`;
   values.unsubscribe_url = unsubscribeUrl;
   const linkSigner = async (url: string) => {
-    const token = await signToken({ type: "click", campaignId: campaign.id, recipientId: recipient.id, contactId: contact.id, url }, trackingSecret);
-    return `${publicAppUrl}/click/${token}`;
+    return signTrackedClickUrl(publicAppUrl, trackingSecret, {
+      campaignId: campaign.id,
+      recipientId: recipient.id,
+      contactId: contact.id,
+      email: contact.email,
+      url
+    });
   };
 
   const subject = renderTemplate(template.subject, values);
   const renderedHtml = renderTemplate(template.html_body, values);
   const renderedText = renderTemplate(template.text_body, values);
-  const html = appendComplianceFooter(await rewriteHtmlLinks(renderedHtml, linkSigner), unsubscribeUrl);
+  const html = appendComplianceFooter(await rewriteLinksAsync(renderedHtml, linkSigner), unsubscribeUrl);
   const text = appendTextFooter(renderedText, unsubscribeUrl);
   const sendRecordId = crypto.randomUUID();
   await writeContactEmailSend(env.DB, {
@@ -1327,14 +1354,16 @@ async function createCampaignSendRun(env: Env, campaign: Campaign, options: { li
 
 async function sendCampaignTestEmails(env: Env, campaign: Campaign, input: {
   recipients: string[];
+  fullName: string;
   subject?: string;
   htmlBody?: string;
   textBody?: string;
 }) {
-  const [product, template, publicAppUrl] = await Promise.all([
+  const [product, template, publicAppUrl, trackingSecret] = await Promise.all([
     getProduct(env.DB),
     getTemplate(env.DB, campaign.template_id),
-    getPublicAppUrl(env.DB, env)
+    getPublicAppUrl(env.DB, env),
+    getTrackingSecret(env.DB, env)
   ]);
   if (!template) return { ok: false as const, statusCode: 404 as const, error: "Template missing." };
 
@@ -1347,11 +1376,16 @@ async function sendCampaignTestEmails(env: Env, campaign: Campaign, input: {
   const sent: Array<{ to: string; messageId: string }> = [];
 
   for (const to of input.recipients) {
-    const values = testRecipientValues(to, product, publicAppUrl);
+    const values = testRecipientValues(to, input.fullName, product, publicAppUrl);
     const subject = renderTemplate(subjectTemplate, values);
     const renderedHtml = renderTemplate(htmlTemplate, values);
     const renderedText = renderTemplate(textTemplate, values);
-    const html = appendComplianceFooter(renderedHtml, values.unsubscribe_url);
+    const linkSigner = (url: string) => signTrackedClickUrl(publicAppUrl, trackingSecret, {
+      campaignId: campaign.id,
+      email: to,
+      url
+    });
+    const html = appendComplianceFooter(await rewriteLinksAsync(renderedHtml, linkSigner), values.unsubscribe_url);
     const text = appendTextFooter(renderedText || htmlToText(renderedHtml), values.unsubscribe_url);
     const result = await sendEmail(env.EMAIL, {
       to,
@@ -1591,6 +1625,25 @@ function allowedSenderDomains(env: Env, product: Pick<Product, "sending_domain" 
   ].map((domain) => domain.trim().toLowerCase()).filter(Boolean)));
 }
 
+async function verifyTrackingToken(env: Env, token: string) {
+  try {
+    return await verifyToken(token, await getTrackingSecret(env.DB, env));
+  } catch {
+    return null;
+  }
+}
+
+async function signTrackedClickUrl(publicAppUrl: string, trackingSecret: string, payload: {
+  campaignId?: string;
+  recipientId?: string;
+  contactId?: string;
+  email?: string;
+  url: string;
+}) {
+  const token = await signToken({ type: "click", ...payload }, trackingSecret);
+  return `${publicAppUrl}/click/${token}`;
+}
+
 function domainFromEmail(email: string) {
   return email.includes("@") ? email.split("@").pop()?.toLowerCase() ?? "" : "";
 }
@@ -1637,34 +1690,18 @@ function contactValues(contact: Contact): Record<string, string> {
   };
 }
 
-function testRecipientValues(email: string, product: Product, publicAppUrl: string): Record<string, string> {
-  const localPart = email.split("@")[0] || "test";
-  const firstName = titleCase(localPart.split(/[._-]+/).filter(Boolean)[0] || "test");
-  const fullName = `${firstName} Recipient`;
+function testRecipientValues(email: string, fullName: string, product: Product, publicAppUrl: string): Record<string, string> {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  const firstName = parts[0] || fullName.trim();
+  const lastName = parts.slice(1).join(" ");
   return {
     email,
     first_name: firstName,
-    last_name: "Recipient",
-    full_name: fullName,
+    last_name: lastName,
+    full_name: fullName.trim(),
     company: product.name,
     unsubscribe_url: `${publicAppUrl}/unsubscribe/preview`
   };
-}
-
-function titleCase(value: string) {
-  return value ? `${value.slice(0, 1).toUpperCase()}${value.slice(1)}` : "";
-}
-
-async function rewriteHtmlLinks(html: string, signer: (url: string) => Promise<string>) {
-  const urls = Array.from(html.matchAll(/href=(["'])(https?:\/\/[^"']+)\1/gi));
-  let rewritten = html;
-  for (const match of urls) {
-    const original = match[0];
-    const quote = match[1];
-    const url = match[2];
-    rewritten = rewritten.replace(original, `href=${quote}${await signer(url)}${quote}`);
-  }
-  return rewritten;
 }
 
 async function check(name: string, fn: () => Promise<unknown>) {
