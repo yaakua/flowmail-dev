@@ -528,6 +528,7 @@ app.get("/api/v1/campaigns", async (c) => {
 
 app.get("/api/v1/send-tasks", async (c) => {
   const campaignId = c.req.query("campaignId");
+  const sendRunId = c.req.query("sendRunId");
   const requestedPage = parsePositiveInt(c.req.query("page"), 1);
   const pageSize = parsePositiveInt(c.req.query("pageSize"), 25, 100);
   const requestedStatus = c.req.query("status");
@@ -542,8 +543,22 @@ app.get("/api/v1/send-tasks", async (c) => {
     filters.push("r.status = ?");
     taskBinds.push(status);
   }
+  if (sendRunId) {
+    filters.push("EXISTS (SELECT 1 FROM campaign_send_run_recipients rr_filter WHERE rr_filter.recipient_id = r.id AND rr_filter.send_run_id = ?)");
+    taskBinds.push(sendRunId);
+  }
   const whereClause = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
-  const campaignWhereClause = campaignId ? "WHERE r.campaign_id = ?" : "";
+  const summaryFilters: string[] = [];
+  const summaryBinds: string[] = [];
+  if (campaignId) {
+    summaryFilters.push("r.campaign_id = ?");
+    summaryBinds.push(campaignId);
+  }
+  if (sendRunId) {
+    summaryFilters.push("EXISTS (SELECT 1 FROM campaign_send_run_recipients rr_filter WHERE rr_filter.recipient_id = r.id AND rr_filter.send_run_id = ?)");
+    summaryBinds.push(sendRunId);
+  }
+  const summaryWhereClause = summaryFilters.length > 0 ? `WHERE ${summaryFilters.join(" AND ")}` : "";
   const totalRow = await c.env.DB.prepare(`SELECT COUNT(*) as count FROM campaign_recipients r ${whereClause}`)
     .bind(...taskBinds)
     .first<{ count: number }>();
@@ -572,8 +587,18 @@ app.get("/api/v1/send-tasks", async (c) => {
      LIMIT ? OFFSET ?`;
   const summarySql = `SELECT r.status, COUNT(*) as count
      FROM campaign_recipients r
-     ${campaignWhereClause}
+     ${summaryWhereClause}
      GROUP BY r.status`;
+  const recentFailureFilters = ["r.failure_reason IS NOT NULL"];
+  const recentFailureBinds: string[] = [];
+  if (campaignId) {
+    recentFailureFilters.push("r.campaign_id = ?");
+    recentFailureBinds.push(campaignId);
+  }
+  if (sendRunId) {
+    recentFailureFilters.push("EXISTS (SELECT 1 FROM campaign_send_run_recipients rr_filter WHERE rr_filter.recipient_id = r.id AND rr_filter.send_run_id = ?)");
+    recentFailureBinds.push(sendRunId);
+  }
   const recentFailuresSql = `SELECT r.*,
       c.name as campaign_name,
       contacts.first_name,
@@ -582,12 +607,12 @@ app.get("/api/v1/send-tasks", async (c) => {
      FROM campaign_recipients r
      JOIN campaigns c ON c.id = r.campaign_id
      LEFT JOIN contacts ON contacts.id = r.contact_id
-     WHERE r.failure_reason IS NOT NULL ${campaignId ? "AND r.campaign_id = ?" : ""}
+     WHERE ${recentFailureFilters.join(" AND ")}
      ORDER BY r.failed_at DESC, r.updated_at DESC
      LIMIT 8`;
   const taskStatement = c.env.DB.prepare(taskSql).bind(...taskBinds, pageSize, offset);
-  const summaryStatement = campaignId ? c.env.DB.prepare(summarySql).bind(campaignId) : c.env.DB.prepare(summarySql);
-  const recentFailuresStatement = campaignId ? c.env.DB.prepare(recentFailuresSql).bind(campaignId) : c.env.DB.prepare(recentFailuresSql);
+  const summaryStatement = c.env.DB.prepare(summarySql).bind(...summaryBinds);
+  const recentFailuresStatement = c.env.DB.prepare(recentFailuresSql).bind(...recentFailureBinds);
   const [tasks, summary, recentFailures] = await Promise.all([
     taskStatement.all(),
     summaryStatement.all<{ status: string; count: number }>(),
@@ -865,8 +890,20 @@ app.post("/api/v1/send-runs/:id/retry", async (c) => {
   return c.json(result);
 });
 
+app.delete("/api/v1/send-runs/:id", async (c) => {
+  const result = await deleteSendRun(c.env, c.req.param("id"));
+  if (!result.ok) return c.json(result, result.statusCode);
+  return c.json(result);
+});
+
 app.post("/api/v1/send-tasks/:id/retry", async (c) => {
   const result = await retryFailedSendTask(c.env, c.req.param("id"));
+  if (!result.ok) return c.json(result, result.statusCode);
+  return c.json(result);
+});
+
+app.delete("/api/v1/send-tasks/:id", async (c) => {
+  const result = await deleteFailedSendTask(c.env, c.req.param("id"));
   if (!result.ok) return c.json(result, result.statusCode);
   return c.json(result);
 });
@@ -1609,6 +1646,64 @@ async function retryFailedSendTask(env: Env, recipientId: string) {
   return { ok: true as const, run, campaign: await getCampaign(env.DB, recipient.campaign_id) };
 }
 
+async function deleteSendRun(env: Env, sendRunId: string) {
+  const sourceRun = await env.DB.prepare("SELECT * FROM campaign_send_runs WHERE id = ?")
+    .bind(sendRunId)
+    .first<CampaignSendRun>();
+  if (!sourceRun) return { ok: false as const, statusCode: 404 as const, error: "Send run not found." };
+
+  const orphanRows = await env.DB.prepare(
+    `SELECT rr.recipient_id
+     FROM campaign_send_run_recipients rr
+     WHERE rr.send_run_id = ?
+       AND NOT EXISTS (
+         SELECT 1
+         FROM campaign_send_run_recipients other
+         WHERE other.recipient_id = rr.recipient_id
+           AND other.send_run_id <> ?
+       )`
+  ).bind(sendRunId, sendRunId).all<{ recipient_id: string }>();
+  const orphanRecipientIds = (orphanRows.results ?? []).map((row) => row.recipient_id);
+
+  const statements = [
+    env.DB.prepare("DELETE FROM contact_email_sends WHERE send_run_id = ?").bind(sendRunId),
+    env.DB.prepare("DELETE FROM campaign_send_run_recipients WHERE send_run_id = ?").bind(sendRunId),
+    env.DB.prepare("DELETE FROM campaign_send_runs WHERE id = ?").bind(sendRunId)
+  ];
+  if (orphanRecipientIds.length > 0) {
+    statements.push(
+      env.DB.prepare(`DELETE FROM campaign_recipients WHERE id IN (${placeholders(orphanRecipientIds.length)})`)
+        .bind(...orphanRecipientIds)
+    );
+  }
+
+  await env.DB.batch(statements);
+  await updateCampaignCompletion(env.DB, sourceRun.campaign_id);
+  return { ok: true as const, deletedRunId: sendRunId, deletedRecords: orphanRecipientIds.length };
+}
+
+async function deleteFailedSendTask(env: Env, recipientId: string) {
+  const recipient = await env.DB.prepare("SELECT id, campaign_id, status FROM campaign_recipients WHERE id = ?")
+    .bind(recipientId)
+    .first<{ id: string; campaign_id: string; status: string }>();
+  if (!recipient) return { ok: false as const, statusCode: 404 as const, error: "Send record not found." };
+  if (recipient.status !== "failed") return { ok: false as const, statusCode: 422 as const, error: "Only failed send records can be deleted." };
+
+  const runRows = await env.DB.prepare("SELECT send_run_id FROM campaign_send_run_recipients WHERE recipient_id = ?")
+    .bind(recipientId)
+    .all<{ send_run_id: string }>();
+  const runIds = Array.from(new Set((runRows.results ?? []).map((row) => row.send_run_id).filter(Boolean)));
+
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM contact_email_sends WHERE recipient_id = ?").bind(recipientId),
+    env.DB.prepare("DELETE FROM campaign_send_run_recipients WHERE recipient_id = ?").bind(recipientId),
+    env.DB.prepare("DELETE FROM campaign_recipients WHERE id = ?").bind(recipientId)
+  ]);
+  await Promise.all(runIds.map((runId) => refreshSendRun(env.DB, runId)));
+  await updateCampaignCompletion(env.DB, recipient.campaign_id);
+  return { ok: true as const, deletedRecordId: recipientId };
+}
+
 function normalizeBatchLimit(limit: number | undefined, available: number) {
   if (available <= 0) return 0;
   if (!limit) return available;
@@ -1638,10 +1733,12 @@ function normalizeTestRecipients(input: string[]) {
 async function getCampaignSendRuns(db: D1Database, campaignId?: string, limit = 20) {
   const where = campaignId ? "WHERE sr.campaign_id = ?" : "";
   const sql = `SELECT sr.*,
+      c.name as campaign_name,
       SUM(CASE WHEN r.status IN ('queued', 'sending') THEN 1 ELSE 0 END) as current_queued_count,
       SUM(CASE WHEN r.status = 'sent' THEN 1 ELSE 0 END) as current_sent_count,
       SUM(CASE WHEN r.status = 'failed' THEN 1 ELSE 0 END) as current_failed_count
      FROM campaign_send_runs sr
+     JOIN campaigns c ON c.id = sr.campaign_id
      LEFT JOIN campaign_send_run_recipients rr ON rr.send_run_id = sr.id
      LEFT JOIN campaign_recipients r ON r.id = rr.recipient_id
      ${where}
@@ -1657,6 +1754,10 @@ async function getCampaignSendRuns(db: D1Database, campaignId?: string, limit = 
     sent_count: Number(run.current_sent_count ?? run.sent_count ?? 0),
     failed_count: Number(run.current_failed_count ?? run.failed_count ?? 0)
   }));
+}
+
+function placeholders(count: number) {
+  return Array.from({ length: count }, () => "?").join(", ");
 }
 
 async function refreshSendRunForRecipient(db: D1Database, recipientId: string, preferredRunId?: string) {

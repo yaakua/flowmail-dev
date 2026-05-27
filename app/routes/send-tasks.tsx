@@ -40,6 +40,7 @@ type SendTaskResponse = {
 type SendRun = {
   id: string;
   campaign_id: string;
+  campaign_name?: string;
   status: string;
   selected_count: number;
   queued_count: number;
@@ -59,6 +60,7 @@ export default function SendTasks() {
   const campaignId = params.get("campaignId");
   const [data, setData] = useState<SendTaskResponse | null>(null);
   const [activeFilter, setActiveFilter] = useState<(typeof filters)[number]>("all");
+  const [selectedRunId, setSelectedRunId] = useState("");
   const [page, setPage] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
@@ -72,9 +74,11 @@ export default function SendTasks() {
         pageSize: String(PAGE_SIZE)
       });
       if (campaignId) query.set("campaignId", campaignId);
+      if (selectedRunId) query.set("sendRunId", selectedRunId);
       if (activeFilter !== "all") query.set("status", activeFilter);
       const nextData = await api<SendTaskResponse>(`/api/v1/send-tasks?${query.toString()}`);
       setData(nextData);
+      if (selectedRunId && !nextData.runs.some((run) => run.id === selectedRunId)) setSelectedRunId("");
       if (nextData.page !== page) setPage(nextData.page);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : String(loadError));
@@ -87,11 +91,11 @@ export default function SendTasks() {
     load();
     const timer = window.setInterval(load, 15000);
     return () => window.clearInterval(timer);
-  }, [campaignId, activeFilter, page]);
+  }, [campaignId, activeFilter, selectedRunId, page]);
 
   useEffect(() => {
     setPage(1);
-  }, [campaignId, activeFilter]);
+  }, [campaignId, activeFilter, selectedRunId]);
 
   const tasks = data?.tasks ?? [];
   const summary = data?.summary ?? {};
@@ -99,6 +103,7 @@ export default function SendTasks() {
   const open = Number(summary.queued ?? 0) + Number(summary.sending ?? 0);
   const failures = Number(summary.failed ?? 0);
   const runs = data?.runs ?? [];
+  const selectedRun = runs.find((run) => run.id === selectedRunId);
   const pageTotal = data?.total ?? 0;
 
   async function retryRun(runId: string) {
@@ -108,6 +113,19 @@ export default function SendTasks() {
 
   async function retryTask(taskId: string) {
     await api(`/api/v1/send-tasks/${taskId}/retry`, { method: "POST", body: "{}" });
+    await load();
+  }
+
+  async function deleteRun(runId: string) {
+    if (!window.confirm(t(locale, "deleteSendRunConfirm"))) return;
+    await api(`/api/v1/send-runs/${runId}`, { method: "DELETE" });
+    if (selectedRunId === runId) setSelectedRunId("");
+    await load();
+  }
+
+  async function deleteFailedTask(taskId: string) {
+    if (!window.confirm(t(locale, "deleteFailedRecordConfirm"))) return;
+    await api(`/api/v1/send-tasks/${taskId}`, { method: "DELETE" });
     await load();
   }
 
@@ -135,11 +153,31 @@ export default function SendTasks() {
       <section className="side-card">
         <h2>{t(locale, "latestSendRuns")}</h2>
         {runs.length === 0 ? <p className="muted">{t(locale, "noSendRuns")}</p> : null}
+        {runs.length > 0 ? (
+          <button
+            aria-pressed={!selectedRunId}
+            className={!selectedRunId ? "secondary-button compact-action active-filter-button" : "secondary-button compact-action"}
+            onClick={() => setSelectedRunId("")}
+          >
+            {t(locale, "allSendRuns")}
+          </button>
+        ) : null}
         {runs.slice(0, 6).map((run) => (
-          <div className="run-card" key={run.id}>
-            <div className="mini-row"><strong>{translateStatus(locale, run.status)}</strong><span>{formatDate(locale, run.created_at)}</span></div>
-            <div className="mini-row"><strong>{run.sent_count}/{run.selected_count}</strong><span>{t(locale, "sent")}</span></div>
-            {run.failed_count > 0 ? <button className="secondary-button compact-action" onClick={() => retryRun(run.id)}>{t(locale, "retryFailed")}</button> : null}
+          <div className={selectedRunId === run.id ? "run-card selected" : "run-card"} key={run.id}>
+            <button className="run-card-main" onClick={() => setSelectedRunId(run.id)}>
+              <span className="mini-row"><strong>{translateStatus(locale, run.status)}</strong><span>{formatDate(locale, run.created_at)}</span></span>
+              {run.campaign_name ? <span className="muted">{run.campaign_name}</span> : null}
+              <span className="batch-stat-grid">
+                <span><strong>{run.selected_count}</strong>{t(locale, "selectedRecipients")}</span>
+                <span><strong>{run.queued_count}</strong>{t(locale, "queued")}</span>
+                <span><strong>{run.sent_count}</strong>{t(locale, "sent")}</span>
+                <span><strong>{run.failed_count}</strong>{t(locale, "failed")}</span>
+              </span>
+            </button>
+            <div className="row-actions compact-row-actions">
+              {run.failed_count > 0 ? <button className="secondary-button compact-action" onClick={() => retryRun(run.id)}>{t(locale, "retryFailed")}</button> : null}
+              <button className="danger-button compact-action" onClick={() => deleteRun(run.id)}>{t(locale, "deleteSendRun")}</button>
+            </div>
           </div>
         ))}
       </section>
@@ -163,12 +201,13 @@ export default function SendTasks() {
           <p className="eyebrow">{t(locale, "sendRuns")}</p>
           <h1>{t(locale, "sendRecordTitle")}</h1>
           <p>{t(locale, "sendRecordLead")}</p>
+          {selectedRun ? <p className="muted">{t(locale, "viewingSendRun", { date: formatDate(locale, selectedRun.created_at) })}</p> : null}
         </div>
         <button className="secondary-button" onClick={load}>{t(locale, "reload")}</button>
       </section>
 
       <section className="metric-row metric-row-4 compact-metrics">
-        <MetricCard label={t(locale, "sendRuns")} value={runs.length} />
+        <MetricCard label={selectedRun ? t(locale, "selectedRecipients") : t(locale, "sendRuns")} value={selectedRun ? selectedRun.selected_count : runs.length} />
         <MetricCard label={t(locale, "queued")} value={open} note={t(locale, "queueLimitedSending")} />
         <MetricCard label={t(locale, "sent")} value={summary.sent ?? 0} note={t(locale, "messageId")} />
         <MetricCard label={t(locale, "failed")} value={failures} />
@@ -221,6 +260,7 @@ export default function SendTasks() {
                         <>
                           <br />
                           <button className="secondary-button compact-action" onClick={() => retryTask(task.id)}>{t(locale, "retryThisRecord")}</button>
+                          <button className="danger-button compact-action" onClick={() => deleteFailedTask(task.id)}>{t(locale, "deleteFailedRecord")}</button>
                         </>
                       ) : null}
                     </td>

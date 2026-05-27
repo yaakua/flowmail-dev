@@ -1285,6 +1285,59 @@ input[readonly] {
   padding-top: 0;
 }
 
+.run-card.selected {
+  border-color: var(--primary);
+}
+
+.run-card-main {
+  display: grid;
+  gap: var(--space-xs);
+  width: 100%;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: inherit;
+  padding: var(--space-sm);
+  text-align: left;
+}
+
+.run-card.selected .run-card-main,
+.active-filter-button {
+  border-color: oklch(71% 0.045 154);
+  background: var(--primary-soft);
+}
+
+.batch-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-2xs);
+}
+
+.batch-stat-grid span {
+  display: grid;
+  gap: 0.125rem;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.batch-stat-grid strong {
+  color: var(--ink);
+  font-family: var(--font-data);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.compact-row-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-xs);
+}
+
+.compact-row-actions .compact-action {
+  width: auto;
+}
+
 .inline-check-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
