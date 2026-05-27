@@ -1386,6 +1386,11 @@ input[readonly] {
   margin-top: var(--space-md);
 }
 
+.flush-actions {
+  justify-content: flex-end;
+  margin-top: 0;
+}
+
 .form-status {
   margin: var(--space-sm) 0 0;
   border: 1px solid var(--line);
@@ -1714,9 +1719,64 @@ input[readonly] {
   max-width: none;
 }
 
+.send-run-list-panel {
+  max-width: none;
+}
+
+.send-task-controls {
+  display: grid;
+  grid-template-columns: minmax(10rem, 14rem) minmax(0, 1fr);
+  align-items: end;
+  gap: var(--space-sm);
+  border-bottom: 1px solid var(--line-soft);
+  padding-bottom: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+
+.send-task-controls label {
+  margin-bottom: 0;
+}
+
+.send-task-search {
+  display: grid;
+  gap: var(--space-xs);
+}
+
+.send-task-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: var(--space-xs);
+}
+
 .send-task-table {
   min-width: 0;
   table-layout: fixed;
+}
+
+.send-run-table {
+  min-width: 58rem;
+  table-layout: fixed;
+}
+
+.send-run-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--space-xs);
+}
+
+.send-run-metrics span {
+  display: grid;
+  gap: 0.125rem;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.send-run-metrics strong {
+  color: var(--ink);
+  font-family: var(--font-data);
+  font-size: var(--text-sm);
+  font-weight: 700;
 }
 
 .click-table {
@@ -1783,6 +1843,36 @@ input[readonly] {
 .send-task-table th:nth-child(4),
 .send-task-table td:nth-child(4) {
   width: 17%;
+}
+
+.send-run-table th:nth-child(1),
+.send-run-table td:nth-child(1) {
+  width: 18%;
+}
+
+.send-run-table th:nth-child(2),
+.send-run-table td:nth-child(2) {
+  width: 22%;
+}
+
+.send-run-table th:nth-child(3),
+.send-run-table td:nth-child(3) {
+  width: 12%;
+}
+
+.send-run-table th:nth-child(4),
+.send-run-table td:nth-child(4) {
+  width: 29%;
+}
+
+.send-run-table th:nth-child(5),
+.send-run-table td:nth-child(5) {
+  width: 10%;
+}
+
+.send-run-table th:nth-child(6),
+.send-run-table td:nth-child(6) {
+  width: 9%;
 }
 
 .mono-cell {
@@ -2633,7 +2723,9 @@ input[readonly] {
   .reply-profile,
   .reply-detail-grid,
   .reply-facts,
-  .detail-grid {
+  .detail-grid,
+  .send-task-controls,
+  .send-task-search-row {
     grid-template-columns: 1fr;
   }
 

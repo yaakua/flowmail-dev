@@ -532,7 +532,9 @@ app.get("/api/v1/send-tasks", async (c) => {
   const requestedPage = parsePositiveInt(c.req.query("page"), 1);
   const pageSize = parsePositiveInt(c.req.query("pageSize"), 25, 100);
   const requestedStatus = c.req.query("status");
-  const status = requestedStatus && ["queued", "sending", "sent", "failed"].includes(requestedStatus) ? requestedStatus : undefined;
+  const keyword = c.req.query("q")?.trim().slice(0, 120);
+  const searchableStatuses = ["queued", "sending", "sent", "failed", "suppressed", "unsubscribed"];
+  const status = requestedStatus && searchableStatuses.includes(requestedStatus) ? requestedStatus : undefined;
   const filters: string[] = [];
   const taskBinds: (string | number)[] = [];
   if (campaignId) {
@@ -547,6 +549,10 @@ app.get("/api/v1/send-tasks", async (c) => {
     filters.push("EXISTS (SELECT 1 FROM campaign_send_run_recipients rr_filter WHERE rr_filter.recipient_id = r.id AND rr_filter.send_run_id = ?)");
     taskBinds.push(sendRunId);
   }
+  if (keyword) {
+    filters.push(`LOWER(COALESCE(r.email, '') || ' ' || COALESCE(contacts.first_name, '') || ' ' || COALESCE(contacts.last_name, '') || ' ' || COALESCE(contacts.company, '')) LIKE ?`);
+    taskBinds.push(`%${keyword.toLowerCase()}%`);
+  }
   const whereClause = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
   const summaryFilters: string[] = [];
   const summaryBinds: string[] = [];
@@ -558,8 +564,12 @@ app.get("/api/v1/send-tasks", async (c) => {
     summaryFilters.push("EXISTS (SELECT 1 FROM campaign_send_run_recipients rr_filter WHERE rr_filter.recipient_id = r.id AND rr_filter.send_run_id = ?)");
     summaryBinds.push(sendRunId);
   }
+  if (keyword) {
+    summaryFilters.push(`LOWER(COALESCE(r.email, '') || ' ' || COALESCE(contacts.first_name, '') || ' ' || COALESCE(contacts.last_name, '') || ' ' || COALESCE(contacts.company, '')) LIKE ?`);
+    summaryBinds.push(`%${keyword.toLowerCase()}%`);
+  }
   const summaryWhereClause = summaryFilters.length > 0 ? `WHERE ${summaryFilters.join(" AND ")}` : "";
-  const totalRow = await c.env.DB.prepare(`SELECT COUNT(*) as count FROM campaign_recipients r ${whereClause}`)
+  const totalRow = await c.env.DB.prepare(`SELECT COUNT(*) as count FROM campaign_recipients r LEFT JOIN contacts ON contacts.id = r.contact_id ${whereClause}`)
     .bind(...taskBinds)
     .first<{ count: number }>();
   const total = Number(totalRow?.count ?? 0);
@@ -587,6 +597,7 @@ app.get("/api/v1/send-tasks", async (c) => {
      LIMIT ? OFFSET ?`;
   const summarySql = `SELECT r.status, COUNT(*) as count
      FROM campaign_recipients r
+     LEFT JOIN contacts ON contacts.id = r.contact_id
      ${summaryWhereClause}
      GROUP BY r.status`;
   const recentFailureFilters = ["r.failure_reason IS NOT NULL"];
@@ -598,6 +609,10 @@ app.get("/api/v1/send-tasks", async (c) => {
   if (sendRunId) {
     recentFailureFilters.push("EXISTS (SELECT 1 FROM campaign_send_run_recipients rr_filter WHERE rr_filter.recipient_id = r.id AND rr_filter.send_run_id = ?)");
     recentFailureBinds.push(sendRunId);
+  }
+  if (keyword) {
+    recentFailureFilters.push(`LOWER(COALESCE(r.email, '') || ' ' || COALESCE(contacts.first_name, '') || ' ' || COALESCE(contacts.last_name, '') || ' ' || COALESCE(contacts.company, '')) LIKE ?`);
+    recentFailureBinds.push(`%${keyword.toLowerCase()}%`);
   }
   const recentFailuresSql = `SELECT r.*,
       c.name as campaign_name,
@@ -1736,7 +1751,17 @@ async function getCampaignSendRuns(db: D1Database, campaignId?: string, limit = 
       c.name as campaign_name,
       SUM(CASE WHEN r.status IN ('queued', 'sending') THEN 1 ELSE 0 END) as current_queued_count,
       SUM(CASE WHEN r.status = 'sent' THEN 1 ELSE 0 END) as current_sent_count,
-      SUM(CASE WHEN r.status = 'failed' THEN 1 ELSE 0 END) as current_failed_count
+      SUM(CASE WHEN r.status = 'failed' THEN 1 ELSE 0 END) as current_failed_count,
+      SUM(CASE WHEN r.status = 'unsubscribed' THEN 1 ELSE 0 END) as current_unsubscribed_count,
+      SUM(CASE WHEN r.status = 'suppressed' THEN 1 ELSE 0 END) as current_suppressed_count,
+      (SELECT COUNT(*)
+       FROM email_events e
+       JOIN campaign_send_run_recipients rr_click ON rr_click.recipient_id = e.recipient_id
+       WHERE rr_click.send_run_id = sr.id AND e.event_type = 'click') as click_count,
+      (SELECT COUNT(*)
+       FROM email_events e
+       JOIN campaign_send_run_recipients rr_unsubscribe ON rr_unsubscribe.recipient_id = e.recipient_id
+       WHERE rr_unsubscribe.send_run_id = sr.id AND e.event_type = 'unsubscribe') as unsubscribe_event_count
      FROM campaign_send_runs sr
      JOIN campaigns c ON c.id = sr.campaign_id
      LEFT JOIN campaign_send_run_recipients rr ON rr.send_run_id = sr.id
@@ -1752,7 +1777,11 @@ async function getCampaignSendRuns(db: D1Database, campaignId?: string, limit = 
     ...run,
     queued_count: Number(run.current_queued_count ?? run.queued_count ?? 0),
     sent_count: Number(run.current_sent_count ?? run.sent_count ?? 0),
-    failed_count: Number(run.current_failed_count ?? run.failed_count ?? 0)
+    failed_count: Number(run.current_failed_count ?? run.failed_count ?? 0),
+    unsubscribed_count: Number(run.current_unsubscribed_count ?? 0),
+    suppressed_count: Number(run.current_suppressed_count ?? 0),
+    click_count: Number(run.click_count ?? 0),
+    unsubscribe_event_count: Number(run.unsubscribe_event_count ?? 0)
   }));
 }
 
