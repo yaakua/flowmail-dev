@@ -27,12 +27,13 @@ import {
   discoverSavedCloudflareEmailConfig,
   getCloudflareEmailConfig,
   saveCloudflareEmailConfig,
-  sendCloudflareEmailTest,
+  sendCloudflareEmail,
   validateCloudflareEmailTokenForSetup,
   validateSavedCloudflareEmailTokenForSetup
 } from "./cloudflare-email";
 import { countD1Changes, runD1Batches, summarizeContactImport } from "./contact-import";
 import { sendEmail } from "./email-sender";
+import type { SendEmailParams } from "./email-sender";
 import { createPasswordSessionCookie, getPublicAppUrl, getTrackingSecret, rememberPublicAppUrl, requestPublicAppUrl, requireFlowmailSession } from "./runtime-config";
 import { ensureSchema } from "./schema";
 import type { Campaign, CampaignSendRun, Contact, ContactEmailSend, Env, EventJob, InboundAttribution, Product, SendJob, Template } from "./types";
@@ -290,15 +291,14 @@ app.post("/api/v1/setup/test-email", async (c) => {
   let sent: { messageId: string; provider?: string };
   let provider = "cloudflare-binding";
   try {
-    sent = await sendCloudflareEmailTest(c.env.DB, {
+    sent = await sendOutboundEmail(c.env, {
       to,
-      fromEmail: product.default_from_email,
-      fromName: product.name,
-      replyToEmail: product.reply_to_email || product.default_from_email,
+      from: { email: product.default_from_email, name: product.name },
+      replyTo: product.reply_to_email || product.default_from_email,
       subject,
       html,
       text
-    }, c.env);
+    });
     provider = sent.provider ?? provider;
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
@@ -309,14 +309,7 @@ app.post("/api/v1/setup/test-email", async (c) => {
       return cloudflareEmailErrorResponse(c, error);
     }
     if (!message.includes("Save Cloudflare email config") && !message.includes("Cloudflare API token")) throw error;
-    sent = await sendEmail(c.env.EMAIL, {
-      to,
-      from: { email: product.default_from_email, name: product.name },
-      replyTo: product.reply_to_email || product.default_from_email,
-      subject,
-      html,
-      text
-    });
+    return cloudflareEmailErrorResponse(c, error);
   }
   await writeEvent(c.env.DB, { eventType: "test_email", metadata: { to, messageId: sent.messageId } });
   return c.json({ ok: true, to, messageId: sent.messageId, simulated: provider !== "cloudflare-api" && import.meta.env.DEV, provider });
@@ -535,6 +528,29 @@ app.get("/api/v1/campaigns", async (c) => {
 
 app.get("/api/v1/send-tasks", async (c) => {
   const campaignId = c.req.query("campaignId");
+  const requestedPage = parsePositiveInt(c.req.query("page"), 1);
+  const pageSize = parsePositiveInt(c.req.query("pageSize"), 25, 100);
+  const requestedStatus = c.req.query("status");
+  const status = requestedStatus && ["queued", "sending", "sent", "failed"].includes(requestedStatus) ? requestedStatus : undefined;
+  const filters: string[] = [];
+  const taskBinds: (string | number)[] = [];
+  if (campaignId) {
+    filters.push("r.campaign_id = ?");
+    taskBinds.push(campaignId);
+  }
+  if (status) {
+    filters.push("r.status = ?");
+    taskBinds.push(status);
+  }
+  const whereClause = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+  const campaignWhereClause = campaignId ? "WHERE r.campaign_id = ?" : "";
+  const totalRow = await c.env.DB.prepare(`SELECT COUNT(*) as count FROM campaign_recipients r ${whereClause}`)
+    .bind(...taskBinds)
+    .first<{ count: number }>();
+  const total = Number(totalRow?.count ?? 0);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(requestedPage, totalPages);
+  const offset = (page - 1) * pageSize;
   const taskSql = `SELECT r.*,
       c.name as campaign_name,
       c.status as campaign_status,
@@ -551,12 +567,12 @@ app.get("/api/v1/send-tasks", async (c) => {
        FROM campaign_send_run_recipients
        GROUP BY recipient_id
      ) latest_run ON latest_run.recipient_id = r.id
-     ${campaignId ? "WHERE r.campaign_id = ?" : ""}
+     ${whereClause}
      ORDER BY r.updated_at DESC, r.created_at DESC
-     LIMIT 500`;
+     LIMIT ? OFFSET ?`;
   const summarySql = `SELECT r.status, COUNT(*) as count
      FROM campaign_recipients r
-     ${campaignId ? "WHERE r.campaign_id = ?" : ""}
+     ${campaignWhereClause}
      GROUP BY r.status`;
   const recentFailuresSql = `SELECT r.*,
       c.name as campaign_name,
@@ -569,7 +585,7 @@ app.get("/api/v1/send-tasks", async (c) => {
      WHERE r.failure_reason IS NOT NULL ${campaignId ? "AND r.campaign_id = ?" : ""}
      ORDER BY r.failed_at DESC, r.updated_at DESC
      LIMIT 8`;
-  const taskStatement = campaignId ? c.env.DB.prepare(taskSql).bind(campaignId) : c.env.DB.prepare(taskSql);
+  const taskStatement = c.env.DB.prepare(taskSql).bind(...taskBinds, pageSize, offset);
   const summaryStatement = campaignId ? c.env.DB.prepare(summarySql).bind(campaignId) : c.env.DB.prepare(summarySql);
   const recentFailuresStatement = campaignId ? c.env.DB.prepare(recentFailuresSql).bind(campaignId) : c.env.DB.prepare(recentFailuresSql);
   const [tasks, summary, recentFailures] = await Promise.all([
@@ -582,7 +598,11 @@ app.get("/api/v1/send-tasks", async (c) => {
     tasks: tasks.results ?? [],
     summary: Object.fromEntries((summary.results ?? []).map((row) => [row.status, Number(row.count)])),
     recentFailures: recentFailures.results ?? [],
-    runs
+    runs,
+    total,
+    page,
+    pageSize,
+    totalPages
   });
 });
 
@@ -845,6 +865,12 @@ app.post("/api/v1/send-runs/:id/retry", async (c) => {
   return c.json(result);
 });
 
+app.post("/api/v1/send-tasks/:id/retry", async (c) => {
+  const result = await retryFailedSendTask(c.env, c.req.param("id"));
+  if (!result.ok) return c.json(result, result.statusCode);
+  return c.json(result);
+});
+
 app.get("/api/v1/inbox/unread-count", async (c) => {
   const row = await c.env.DB.prepare(
     `SELECT COUNT(*) as count
@@ -861,7 +887,13 @@ app.get("/api/v1/inbox/unread-count", async (c) => {
 
 app.get("/api/v1/inbox", async (c) => {
   const messages = await c.env.DB.prepare(
-    `SELECT inbound_messages.*, contacts.email as contact_email
+    `SELECT inbound_messages.*, contacts.email as contact_email,
+      CASE WHEN EXISTS (
+        SELECT 1
+        FROM email_events e
+        WHERE json_extract(e.metadata_json, '$.inboundId') = inbound_messages.id
+          AND e.event_type IN ('reply_resolved', 'reply_needs_reply', 'reply_archived', 'reply_unsubscribed', 'manual_reply_sent', 'agent_reply_sent')
+      ) THEN 0 ELSE 1 END as is_unread
      FROM inbound_messages LEFT JOIN contacts ON contacts.id = inbound_messages.contact_id
      ORDER BY inbound_messages.created_at DESC LIMIT 200`
   ).all();
@@ -990,7 +1022,7 @@ app.post("/api/v1/agent-actions/:id/send", async (c) => {
 
   const subject = inbound.subject?.toLowerCase().startsWith("re:") ? inbound.subject : `Re: ${inbound.subject || "your reply"}`;
   const draft = String(output.draft ?? "");
-  const sent = await sendEmail(c.env.EMAIL, {
+  const sent = await sendOutboundEmail(c.env, {
     to: inbound.sender,
     from: { email: product.default_from_email, name: product.name },
     replyTo: product.reply_to_email || product.default_from_email,
@@ -1134,7 +1166,7 @@ async function processSendJob(env: Env, job: SendJob) {
     html,
     text
   });
-  const sent = await sendEmail(env.EMAIL, {
+  const sent = await sendOutboundEmail(env, {
     to: contact.email,
     from: { email: product.default_from_email, name: product.name },
     replyTo: product.reply_to_email || product.default_from_email,
@@ -1200,7 +1232,7 @@ async function sendReplyToInbound(env: Env, inbound: any, text: string, metadata
   if (await isSuppressed(env.DB, inbound.sender)) throw new Error("Recipient is suppressed.");
 
   const subject = inbound.subject?.toLowerCase().startsWith("re:") ? inbound.subject : `Re: ${inbound.subject || "your reply"}`;
-  const sent = await sendEmail(env.EMAIL, {
+  const sent = await sendOutboundEmail(env, {
     to: inbound.sender,
     from: { email: product.default_from_email, name: product.name },
     replyTo: product.reply_to_email || product.default_from_email,
@@ -1482,7 +1514,7 @@ async function sendCampaignTestEmails(env: Env, campaign: Campaign, input: {
     });
     const html = appendComplianceFooter(await rewriteLinksAsync(renderedHtml, linkSigner), values.unsubscribe_url);
     const text = appendTextFooter(renderedText || htmlToText(renderedHtml), values.unsubscribe_url);
-    const result = await sendEmail(env.EMAIL, {
+    const result = await sendOutboundEmail(env, {
       to,
       from: { email: product.default_from_email, name: product.name },
       replyTo: product.reply_to_email || product.default_from_email,
@@ -1546,6 +1578,35 @@ async function retryFailedSendRun(env: Env, sourceRunId: string) {
   const run = await refreshSendRun(env.DB, runId);
   if (!run) return { ok: false as const, statusCode: 500 as const, error: "Retry run could not be created." };
   return { ok: true as const, run, campaign: await getCampaign(env.DB, sourceRun.campaign_id) };
+}
+
+async function retryFailedSendTask(env: Env, recipientId: string) {
+  const recipient = await env.DB.prepare("SELECT id, campaign_id, contact_id, status FROM campaign_recipients WHERE id = ?")
+    .bind(recipientId)
+    .first<{ id: string; campaign_id: string; contact_id: string; status: string }>();
+  if (!recipient) return { ok: false as const, statusCode: 404 as const, error: "Send record not found." };
+  if (recipient.status !== "failed") return { ok: false as const, statusCode: 422 as const, error: "Only failed send records can be retried." };
+
+  const now = new Date().toISOString();
+  const runId = crypto.randomUUID();
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO campaign_send_runs (id, campaign_id, status, audience_filter_json, requested_count, selected_count, queued_count, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(runId, recipient.campaign_id, "sending", JSON.stringify({ type: "retry_failed_recipient", recipientId: recipient.id }), 1, 1, 1, now, now),
+    env.DB.prepare("UPDATE campaigns SET status = ?, completed_at = NULL, updated_at = ? WHERE id = ?")
+      .bind("sending", now, recipient.campaign_id),
+    env.DB.prepare("UPDATE campaign_recipients SET status = ?, failed_at = NULL, failure_reason = NULL, updated_at = ? WHERE id = ?")
+      .bind("queued", now, recipient.id),
+    env.DB.prepare(
+      `INSERT OR IGNORE INTO campaign_send_run_recipients (send_run_id, recipient_id, campaign_id, contact_id, created_at)
+       VALUES (?, ?, ?, ?, ?)`
+    ).bind(runId, recipient.id, recipient.campaign_id, recipient.contact_id, now)
+  ]);
+  await env.SEND_QUEUE.send({ campaignId: recipient.campaign_id, recipientId: recipient.id, sendRunId: runId });
+  const run = await refreshSendRun(env.DB, runId);
+  if (!run) return { ok: false as const, statusCode: 500 as const, error: "Retry run could not be created." };
+  return { ok: true as const, run, campaign: await getCampaign(env.DB, recipient.campaign_id) };
 }
 
 function normalizeBatchLimit(limit: number | undefined, available: number) {
@@ -1747,6 +1808,30 @@ function cloudflareEmailErrorResponse(c: any, error: unknown) {
   const status = error instanceof CloudflareEmailError ? error.status : 500;
   const message = error instanceof Error ? error.message : "Cloudflare email config request failed.";
   return c.json({ error: message }, status);
+}
+
+async function sendOutboundEmail(env: Env, params: SendEmailParams) {
+  try {
+    return await sendCloudflareEmail(env.DB, {
+      to: params.to,
+      fromEmail: params.from.email,
+      fromName: params.from.name,
+      replyToEmail: params.replyTo,
+      subject: params.subject,
+      html: params.html,
+      text: params.text,
+      headers: params.headers
+    }, env);
+  } catch (error) {
+    if (!canFallbackToEmailBinding(error)) throw error;
+    return sendEmail(env.EMAIL, params);
+  }
+}
+
+function canFallbackToEmailBinding(error: unknown) {
+  const message = error instanceof Error ? error.message : "";
+  const configMissing = message.includes("Save Cloudflare email config") || message.includes("Save a Cloudflare API token");
+  return import.meta.env.DEV && (configMissing || isLocalSetupMode());
 }
 
 function isLocalSetupMode() {

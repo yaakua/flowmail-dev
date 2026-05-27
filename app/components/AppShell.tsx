@@ -102,8 +102,10 @@ function useUnreadInboxCount(pathname: string) {
 
     void load();
     const timer = window.setInterval(load, 30000);
+    window.addEventListener("flowmail:inbox-read-status-changed", load);
     return () => {
       cancelled = true;
+      window.removeEventListener("flowmail:inbox-read-status-changed", load);
       window.clearInterval(timer);
     };
   }, [pathname]);

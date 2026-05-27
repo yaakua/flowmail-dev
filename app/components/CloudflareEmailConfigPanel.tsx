@@ -100,7 +100,7 @@ export function CloudflareEmailConfigPanel({
       ? t(locale, "savedTokenEnding", { last4: config.tokenLast4 })
       : t(locale, "savedToken")
     : t(locale, "noSavedToken");
-  const hasDetectedConfig = Boolean(discovery?.suggested || config?.zoneName);
+  const hasDetectedConfig = Boolean(discovery?.suggested || config?.zoneName || hasToken);
   const tokenHasMissingPermissions = Boolean(discovery?.missingPermissions?.length);
   const tokenPermissionsReady = discovery
     ? Boolean(discovery.ok && !tokenHasMissingPermissions)
@@ -110,6 +110,11 @@ export function CloudflareEmailConfigPanel({
   const localizedHelp = useMemo(() => cloudflareHelp(locale), [locale]);
   const workerIsDetected = Boolean(discovery?.workers?.some((worker) => worker.name.toLowerCase() === form.workerName.toLowerCase()));
   const emailDomain = buildSendingDomain(form.zoneName, form.sendingSubdomain);
+  const stepItems = [
+    { id: 1, label: t(locale, hasToken ? "cloudflareStepTokenSavedTitle" : "cloudflareStepTokenTitle") },
+    { id: 2, label: t(locale, hasToken ? "cloudflareStepCurrentConfigTitle" : "cloudflareStepConfigTitle") },
+    { id: 3, label: t(locale, "cloudflareStepVerifyTitle") }
+  ] as const;
 
   useEffect(() => {
     void loadConfig();
@@ -152,8 +157,8 @@ export function CloudflareEmailConfigPanel({
         replyToEmail: nextConfig.fromEmail || product?.default_from_email || nextConfig.replyToEmail || product?.reply_to_email || "",
         token: ""
       });
-      if (nextConfig.tokenSaved && nextConfig.zoneName && nextConfig.fromEmail && nextConfig.replyToEmail) {
-        setConfigStep(mode === "setup" ? 1 : 3);
+      if (nextConfig.tokenSaved) {
+        setConfigStep(2);
       }
       setMessage("");
     } catch (error) {
@@ -275,6 +280,18 @@ export function CloudflareEmailConfigPanel({
     setDiscovery((current) => current ? { ...current, selectedZone: zone ?? null } : current);
   }
 
+  function updateZoneName(zoneName: string) {
+    const sendingSubdomain = reconcileSubdomainForZone(form.sendingSubdomain, zoneName);
+    const emails = resolveSenderEmails(form, zoneName, sendingSubdomain);
+    setForm((current) => ({
+      ...current,
+      zoneName,
+      sendingSubdomain,
+      ...emails
+    }));
+    setDiscovery((current) => current ? { ...current, selectedZone: null } : current);
+  }
+
   function updateSendingSubdomain(value: string) {
     const sendingSubdomain = normalizeSubdomain(value, form.zoneName);
     setForm((current) => ({
@@ -319,6 +336,8 @@ export function CloudflareEmailConfigPanel({
       const nextConfig = await api<CloudflareEmailConfig>("/api/v1/cloudflare/email-config/token", { method: "DELETE" });
       setConfig(nextConfig);
       setForm((current) => ({ ...current, token: "" }));
+      setDiscovery(null);
+      setCheckResult(null);
       setConfigStep(1);
       setMessage(t(locale, "cloudflareTokenRemoved"));
       await onChanged?.();
@@ -327,6 +346,11 @@ export function CloudflareEmailConfigPanel({
     } finally {
       setBusy(null);
     }
+  }
+
+  function startTokenReplacement() {
+    setConfigStep(1);
+    setMessage("");
   }
 
   async function sendTestEmail() {
@@ -350,15 +374,11 @@ export function CloudflareEmailConfigPanel({
     <div className="cloudflare-config-panel">
       <PanelTitle title={mode === "setup" ? `1. ${t(locale, "connectCloudflareEmail")}` : t(locale, "cloudflareEmailConfigTitle")} help={localizedHelp.cloudflareEmailConfig} />
       <p className="muted">
-        {t(locale, "cloudflareConfigLead")}
+        {t(locale, hasToken ? "cloudflareConfiguredLead" : "cloudflareConfigLead")}
       </p>
 
       <div className="config-stepper" aria-label={t(locale, "cloudflareEmailConfigTitle")}>
-        {[
-          { id: 1, label: t(locale, "cloudflareStepTokenTitle") },
-          { id: 2, label: t(locale, "cloudflareStepConfigTitle") },
-          { id: 3, label: t(locale, "cloudflareStepVerifyTitle") }
-        ].map((step) => (
+        {stepItems.map((step) => (
           <button
             className={configStep === step.id ? "config-step active" : configStep > step.id ? "config-step complete" : "config-step"}
             disabled={step.id === 2 && !hasDetectedConfig || step.id === 3 && !canVerifyConfig}
@@ -374,8 +394,8 @@ export function CloudflareEmailConfigPanel({
       {configStep === 1 ? (
         <div className="config-step-content">
           <div className="cloudflare-token-guide">
-            <strong>{t(locale, "cloudflareTokenGuideTitle")}</strong>
-            <p>{t(locale, "cloudflareStepTokenBody")}</p>
+            <strong>{t(locale, hasToken ? "cloudflareReplaceTokenTitle" : "cloudflareTokenGuideTitle")}</strong>
+            <p>{t(locale, hasToken ? "cloudflareReplaceTokenBody" : "cloudflareStepTokenBody")}</p>
             <div className="token-link-row">
               <a className="button-link" href={FLOWMAIL_TOKEN_TEMPLATE_URL} target="_blank" rel="noreferrer">{t(locale, "createFlowmailToken")}</a>
             </div>
@@ -447,7 +467,17 @@ export function CloudflareEmailConfigPanel({
 
       {configStep === 2 ? (
         <div className="config-step-content">
-          <p className="muted">{t(locale, "cloudflareStepConfigBody")}</p>
+          <p className="muted">{t(locale, hasToken ? "cloudflareConfiguredConfigBody" : "cloudflareStepConfigBody")}</p>
+          {hasToken ? (
+            <div className="cloudflare-current-config">
+              <div>
+                <span>{t(locale, "tokenStatus")}</span>
+                <strong>{tokenLabel}</strong>
+                {config?.updatedAt ? <small>{t(locale, "updatedAt", { date: formatDate(config.updatedAt, locale) })}</small> : null}
+              </div>
+              <button className="secondary-button" onClick={startTokenReplacement} disabled={Boolean(busy)}>{t(locale, "replaceCloudflareApiToken")}</button>
+            </div>
+          ) : null}
           {discovery ? (
             <div className="cloudflare-discovery">
               <div className="cloudflare-state-row">
@@ -463,15 +493,24 @@ export function CloudflareEmailConfigPanel({
             <Field label={t(locale, "domain")} help={localizedHelp.zoneName}>
               {discovery?.zones?.length ? (
                 <>
-                  <select value={form.zoneName} onChange={(event) => void selectZone(event.target.value)}>
-                    {discovery.zones.map((zone) => (
-                      <option key={zone.id} value={zone.name}>{zone.name}{zone.status ? ` (${translateStatus(locale, zone.status)})` : ""}</option>
-                    ))}
-                  </select>
+                  <div className="field-action-row">
+                    <select value={form.zoneName} onChange={(event) => void selectZone(event.target.value)}>
+                      {discovery.zones.map((zone) => (
+                        <option key={zone.id} value={zone.name}>{zone.name}{zone.status ? ` (${translateStatus(locale, zone.status)})` : ""}</option>
+                      ))}
+                    </select>
+                    {hasToken ? <button type="button" className="secondary-button" onClick={() => discoverSavedConfig()} disabled={Boolean(busy)}>{t(locale, "refreshDetectedDomains")}</button> : null}
+                  </div>
                   <small className="field-note">{t(locale, "chooseDetectedValue")}</small>
                 </>
               ) : (
-                <input readOnly placeholder="example.com" value={form.zoneName} />
+                <>
+                  <div className="field-action-row">
+                    <input placeholder="example.com" value={form.zoneName} onChange={(event) => updateZoneName(event.target.value)} />
+                    {hasToken ? <button type="button" className="secondary-button" onClick={() => discoverSavedConfig()} disabled={Boolean(busy)}>{t(locale, "loadAvailableDomains")}</button> : null}
+                  </div>
+                  <small className="field-note">{t(locale, hasToken ? "savedTokenDomainSwitchNote" : "chooseDetectedValue")}</small>
+                </>
               )}
             </Field>
             <Field label={t(locale, "sendingSubdomain")} help={localizedHelp.sendingSubdomain}>
@@ -495,7 +534,7 @@ export function CloudflareEmailConfigPanel({
                 </>
               ) : (
                 <>
-                  <input readOnly placeholder="flowmail" value={form.workerName} />
+                  <input placeholder="flowmail" value={form.workerName} onChange={(event) => setForm({ ...form, workerName: event.target.value })} />
                   <small className="field-note">{t(locale, "workerNotDetectedNote", { name: form.workerName || "flowmail" })}</small>
                 </>
               )}
@@ -529,9 +568,9 @@ export function CloudflareEmailConfigPanel({
       ) : null}
 
       <div className="row-actions wizard-actions">
-        {configStep > 1 ? <button className="secondary-button" onClick={() => setConfigStep((configStep - 1) as 1 | 2 | 3)} disabled={Boolean(busy)}>{t(locale, "previousStep")}</button> : null}
+        {configStep > 1 && !(hasToken && configStep === 2) ? <button className="secondary-button" onClick={() => setConfigStep((configStep - 1) as 1 | 2 | 3)} disabled={Boolean(busy)}>{t(locale, "previousStep")}</button> : null}
         {configStep === 1 ? (
-          <button className="secondary-button" onClick={() => setConfigStep(2)} disabled={Boolean(busy) || !hasDetectedConfig || !tokenPermissionsReady}>{t(locale, "continueToConfig")}</button>
+          <button className="secondary-button" onClick={() => setConfigStep(2)} disabled={Boolean(busy) || !hasDetectedConfig || !tokenPermissionsReady}>{t(locale, hasToken ? "continueToCurrentConfig" : "continueToConfig")}</button>
         ) : null}
         {configStep === 2 ? <button onClick={saveConfig} disabled={Boolean(busy) || !canSaveConfig || Boolean(form.token.trim() && !tokenPermissionsReady)}>{t(locale, "saveAndContinueToVerify")}</button> : null}
         {message ? <span className="muted">{message}</span> : null}

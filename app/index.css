@@ -1076,6 +1076,38 @@ input[readonly] {
   line-height: 1.4;
 }
 
+.cloudflare-current-config {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  padding: var(--space-sm);
+}
+
+.cloudflare-current-config span,
+.cloudflare-current-config small {
+  display: block;
+}
+
+.cloudflare-current-config span {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.cloudflare-current-config strong {
+  color: var(--ink);
+  font-size: var(--text-sm);
+}
+
+.cloudflare-current-config small {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
 .danger-link-button {
   border: 0;
   background: transparent;
@@ -1219,6 +1251,12 @@ input[readonly] {
 .cloudflare-state-row {
   display: flex;
   flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+.field-action-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--space-xs);
 }
 
@@ -2532,6 +2570,7 @@ input[readonly] {
   .cloudflare-test-row,
   .token-entry-grid,
   .config-stepper,
+  .field-action-row,
   .ops-grid,
   .import-console,
   .send-settings div,

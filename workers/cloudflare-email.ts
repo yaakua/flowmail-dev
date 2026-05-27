@@ -118,20 +118,24 @@ export type CloudflarePermissionCheck = {
   details: string;
 };
 
-export type CloudflareEmailTestInput = {
+export type CloudflareEmailSendInput = {
   to: string;
   fromEmail: string;
-  fromName: string;
+  fromName?: string;
   replyToEmail?: string;
   subject: string;
   html: string;
   text: string;
+  headers?: Record<string, string>;
 };
 
-export type CloudflareEmailTestResult = {
+export type CloudflareEmailSendResult = {
   messageId: string;
   provider: "cloudflare-api";
 };
+
+export type CloudflareEmailTestInput = CloudflareEmailSendInput;
+export type CloudflareEmailTestResult = CloudflareEmailSendResult;
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 const defaultFetch: FetchLike = (input, init) => globalThis.fetch(input, init);
@@ -461,12 +465,21 @@ export async function applyCloudflareEmailRouting(
 
 export async function sendCloudflareEmailTest(
   db: D1Database,
-  input: CloudflareEmailTestInput,
+  input: CloudflareEmailSendInput,
   env: Pick<Env, "CONFIG_ENCRYPTION_KEY">,
   fetcher: FetchLike = defaultFetch
-): Promise<CloudflareEmailTestResult> {
+): Promise<CloudflareEmailSendResult> {
+  return sendCloudflareEmail(db, input, env, fetcher);
+}
+
+export async function sendCloudflareEmail(
+  db: D1Database,
+  input: CloudflareEmailSendInput,
+  env: Pick<Env, "CONFIG_ENCRYPTION_KEY">,
+  fetcher: FetchLike = defaultFetch
+): Promise<CloudflareEmailSendResult> {
   const config = await readStoredConfig(db);
-  if (!config) throw new CloudflareEmailError("Save Cloudflare email config before sending a real test email.", 422);
+  if (!config) throw new CloudflareEmailError("Save Cloudflare email config before sending real email.", 422);
   const token = await requireSavedToken(db, config, env);
   const client = new CloudflareEmailClient(token, fetcher);
   let result: Record<string, unknown> | null;
@@ -480,7 +493,8 @@ export async function sendCloudflareEmailTest(
       subject: input.subject,
       text: input.text,
       html: input.html,
-      reply_to: input.replyToEmail || input.fromEmail
+      reply_to: input.replyToEmail || input.fromEmail,
+      headers: input.headers
     });
   } catch (error) {
     const message = readableError(error);

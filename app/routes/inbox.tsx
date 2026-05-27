@@ -53,6 +53,17 @@ export default function Inbox() {
     await load();
   }
 
+  async function markSelectedRead() {
+    if (!selected) return;
+    await api(`/api/v1/inbox/${selected.id}/status`, {
+      method: "POST",
+      body: JSON.stringify({ status: "resolved" })
+    });
+    setMessage(t(locale, "markedAsRead"));
+    window.dispatchEvent(new Event("flowmail:inbox-read-status-changed"));
+    await load();
+  }
+
   const aside = (
     <div className="stack">
       <section className="side-card">
@@ -107,7 +118,7 @@ export default function Inbox() {
               <span className="avatar-dot">{message.sender?.slice(0, 1).toUpperCase() || "U"}</span>
               <strong>{message.sender}</strong>
               <span>{message.subject || "No subject"}</span>
-              <small>{translateStatus(locale, message.classification)}</small>
+              <small>{message.is_unread ? t(locale, "unread") : translateStatus(locale, message.classification)}</small>
             </button>
           ))}
           {filteredMessages.length === 0 ? <p className="muted">{t(locale, "noData")}</p> : null}
@@ -120,7 +131,10 @@ export default function Inbox() {
                   <h2>{selected.subject || "User reply"}</h2>
                   <p>{selected.sender} · {new Date(selected.created_at).toLocaleString()}</p>
                 </div>
-                <Link className="secondary-link" to={localizedPath(locale, `/inbox/${selected.id}`)}>{t(locale, "openDetail")}</Link>
+                <div className="row-actions">
+                  <button className="secondary-button" disabled={!selected.is_unread} onClick={markSelectedRead}>{t(locale, "markAsRead")}</button>
+                  <Link className="secondary-link" to={localizedPath(locale, `/inbox/${selected.id}`)}>{t(locale, "openDetail")}</Link>
+                </div>
               </div>
               <article className="message-card">
                 <strong>{selected.sender}</strong>

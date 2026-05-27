@@ -6,7 +6,8 @@ import {
   discoverCloudflareEmailConfig,
   discoverSavedCloudflareEmailConfig,
   getCloudflareEmailConfig,
-  saveCloudflareEmailConfig
+  saveCloudflareEmailConfig,
+  sendCloudflareEmail
 } from "./cloudflare-email";
 
 const secret = "0123456789abcdef0123456789abcdef";
@@ -123,6 +124,10 @@ function cloudflareFetch(options: { rules?: any[] } = {}) {
       return response({ success: true, result: created });
     }
     if (path === "/accounts/account-1/email/sending/send" && method === "POST") {
+      const body = bodies.at(-1)?.body;
+      if (body?.to) {
+        return response({ success: true, result: { id: "cf-message-1" } });
+      }
       return response({ success: false, errors: [{ message: "Missing email payload." }] }, 400);
     }
     if (path === "/zones/zone-1/email/routing/rules/rule-1" && method === "PUT") {
@@ -302,6 +307,36 @@ describe("cloudflare email config", () => {
       fromEmail: "hello@example.com",
       replyToEmail: "support@example.com",
       tokenSaved: false
+    });
+  });
+
+  it("sends arbitrary recipients through Cloudflare Email Sending API", async () => {
+    const database = db();
+    await saveConfig(database);
+    const { fetcher, bodies } = cloudflareFetch();
+
+    const sent = await sendCloudflareEmail(database, {
+      to: "customer@other-domain.test",
+      fromEmail: "hello@example.com",
+      fromName: "Flowmail",
+      replyToEmail: "support@example.com",
+      subject: "Hello",
+      html: "<p>Hello</p>",
+      text: "Hello",
+      headers: { "X-Flowmail-Test": "true" }
+    }, env(), fetcher);
+
+    expect(sent).toEqual({ messageId: "cf-message-1", provider: "cloudflare-api" });
+    expect(fetcher).toHaveBeenLastCalledWith(
+      "https://api.cloudflare.com/client/v4/accounts/account-1/email/sending/send",
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(bodies.at(-1)?.body).toMatchObject({
+      to: "customer@other-domain.test",
+      from: { address: "hello@example.com", name: "Flowmail" },
+      reply_to: "support@example.com",
+      subject: "Hello",
+      headers: { "X-Flowmail-Test": "true" }
     });
   });
 

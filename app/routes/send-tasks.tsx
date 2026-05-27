@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { AppShell, localizedPath, useLocale } from "../components/AppShell";
 import { EmptyState, MetricCard } from "../components/Workflow";
 import { api } from "../lib/api";
 import { t, translateStatus, type Locale } from "../i18n";
+
+const PAGE_SIZE = 25;
 
 type SendTask = {
   id: string;
@@ -29,6 +31,10 @@ type SendTaskResponse = {
   summary: Record<string, number>;
   recentFailures: SendTask[];
   runs: SendRun[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
 };
 
 type SendRun = {
@@ -53,31 +59,55 @@ export default function SendTasks() {
   const campaignId = params.get("campaignId");
   const [data, setData] = useState<SendTaskResponse | null>(null);
   const [activeFilter, setActiveFilter] = useState<(typeof filters)[number]>("all");
+  const [page, setPage] = useState(1);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState("");
 
   async function load() {
-    const query = campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : "";
-    setData(await api<SendTaskResponse>(`/api/v1/send-tasks${query}`));
+    setIsLoading(true);
+    setError("");
+    try {
+      const query = new URLSearchParams({
+        page: String(page),
+        pageSize: String(PAGE_SIZE)
+      });
+      if (campaignId) query.set("campaignId", campaignId);
+      if (activeFilter !== "all") query.set("status", activeFilter);
+      const nextData = await api<SendTaskResponse>(`/api/v1/send-tasks?${query.toString()}`);
+      setData(nextData);
+      if (nextData.page !== page) setPage(nextData.page);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : String(loadError));
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   useEffect(() => {
     load();
     const timer = window.setInterval(load, 15000);
     return () => window.clearInterval(timer);
-  }, [campaignId]);
+  }, [campaignId, activeFilter, page]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [campaignId, activeFilter]);
 
   const tasks = data?.tasks ?? [];
   const summary = data?.summary ?? {};
-  const filteredTasks = useMemo(() => {
-    if (activeFilter === "all") return tasks;
-    return tasks.filter((task) => task.status === activeFilter);
-  }, [tasks, activeFilter]);
-  const total = tasks.length;
+  const total = Number(Object.values(summary).reduce((sum, count) => sum + Number(count), 0));
   const open = Number(summary.queued ?? 0) + Number(summary.sending ?? 0);
   const failures = Number(summary.failed ?? 0);
   const runs = data?.runs ?? [];
+  const pageTotal = data?.total ?? 0;
 
   async function retryRun(runId: string) {
     await api(`/api/v1/send-runs/${runId}/retry`, { method: "POST", body: "{}" });
+    await load();
+  }
+
+  async function retryTask(taskId: string) {
+    await api(`/api/v1/send-tasks/${taskId}/retry`, { method: "POST", body: "{}" });
     await load();
   }
 
@@ -91,7 +121,10 @@ export default function SendTasks() {
               aria-pressed={activeFilter === filter}
               className={activeFilter === filter ? "setup-step-mini complete" : "setup-step-mini"}
               key={filter}
-              onClick={() => setActiveFilter(filter)}
+              onClick={() => {
+                setActiveFilter(filter);
+                setPage(1);
+              }}
             >
               <span>{filter === "all" ? total : summary[filter] ?? 0}</span>
               <strong>{filter === "all" ? t(locale, "allSendTasks") : translateStatus(locale, filter)}</strong>
@@ -144,9 +177,13 @@ export default function SendTasks() {
       <section className="panel send-task-panel">
         <div className="panel-title-row">
           <h2>{activeFilter === "all" ? t(locale, "allSendTasks") : translateStatus(locale, activeFilter)}</h2>
-          <span className="muted">{t(locale, "totalRecords", { count: filteredTasks.length })}</span>
+          <span className="muted">{t(locale, "sendTaskPagination", { page: data?.page ?? page, totalPages: data?.totalPages ?? 1, total: pageTotal })}</span>
         </div>
-        {filteredTasks.length === 0 ? (
+
+        {error ? <p className="form-status error" role="alert">{error}</p> : null}
+        {isLoading ? <p className="muted">{t(locale, "loading")}</p> : null}
+
+        {!isLoading && tasks.length === 0 ? (
           <EmptyState title={t(locale, "noSendTasksTitle")} body={t(locale, "noSendTasksBody")} />
         ) : (
           <div className="table-scroll">
@@ -160,7 +197,7 @@ export default function SendTasks() {
                 </tr>
               </thead>
               <tbody>
-                {filteredTasks.map((task) => (
+                {tasks.map((task) => (
                   <tr key={task.id}>
                     <td>
                       <strong>{displayRecipient(task)}</strong>
@@ -178,13 +215,31 @@ export default function SendTasks() {
                       <br />
                       <span className="muted">{statusTimeLabel(locale, task)}</span>
                     </td>
-                    <td className="error-cell">{task.failure_reason || t(locale, "noError")}</td>
+                    <td className="error-cell">
+                      {task.failure_reason || t(locale, "noError")}
+                      {task.status === "failed" ? (
+                        <>
+                          <br />
+                          <button className="secondary-button compact-action" onClick={() => retryTask(task.id)}>{t(locale, "retryThisRecord")}</button>
+                        </>
+                      ) : null}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         )}
+
+        <div className="pagination-row">
+          <button className="secondary-button" disabled={(data?.page ?? page) <= 1 || isLoading} onClick={() => setPage((current) => Math.max(1, current - 1))}>
+            {t(locale, "previousStep")}
+          </button>
+          <span className="muted">{t(locale, "sendTaskPaginationShort", { page: data?.page ?? page, totalPages: data?.totalPages ?? 1 })}</span>
+          <button className="secondary-button" disabled={(data?.page ?? page) >= (data?.totalPages ?? 1) || isLoading} onClick={() => setPage((current) => current + 1)}>
+            {t(locale, "nextStep")}
+          </button>
+        </div>
       </section>
     </AppShell>
   );
