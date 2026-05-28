@@ -905,6 +905,12 @@ app.post("/api/v1/send-runs/:id/retry", async (c) => {
   return c.json(result);
 });
 
+app.post("/api/v1/send-runs/:id/recover", async (c) => {
+  const result = await recoverSendingSendRun(c.env, c.req.param("id"));
+  if (!result.ok) return c.json(result, result.statusCode);
+  return c.json(result);
+});
+
 app.delete("/api/v1/send-runs/:id", async (c) => {
   const result = await deleteSendRun(c.env, c.req.param("id"));
   if (!result.ok) return c.json(result, result.statusCode);
@@ -1630,6 +1636,45 @@ async function retryFailedSendRun(env: Env, sourceRunId: string) {
   const run = await refreshSendRun(env.DB, runId);
   if (!run) return { ok: false as const, statusCode: 500 as const, error: "Retry run could not be created." };
   return { ok: true as const, run, campaign: await getCampaign(env.DB, sourceRun.campaign_id) };
+}
+
+async function recoverSendingSendRun(env: Env, sourceRunId: string) {
+  const sourceRun = await env.DB.prepare("SELECT * FROM campaign_send_runs WHERE id = ?").bind(sourceRunId).first<CampaignSendRun>();
+  if (!sourceRun) return { ok: false as const, statusCode: 404 as const, error: "Send run not found." };
+  const stuck = await env.DB.prepare(
+    `SELECT r.id, r.contact_id
+     FROM campaign_send_run_recipients rr
+     JOIN campaign_recipients r ON r.id = rr.recipient_id
+     WHERE rr.send_run_id = ? AND r.status = 'sending' AND r.sent_at IS NULL
+     ORDER BY r.updated_at ASC`
+  ).bind(sourceRunId).all<{ id: string; contact_id: string }>();
+  const recipients = stuck.results ?? [];
+  if (recipients.length === 0) return { ok: false as const, statusCode: 422 as const, error: "No in-progress recipients to recover." };
+
+  const now = new Date().toISOString();
+  const runId = crypto.randomUUID();
+  const statements = [
+    env.DB.prepare(
+      `INSERT INTO campaign_send_runs (id, campaign_id, status, audience_filter_json, requested_count, selected_count, queued_count, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(runId, sourceRun.campaign_id, "sending", JSON.stringify({ type: "recover_sending", sourceRunId }), recipients.length, recipients.length, recipients.length, now, now),
+    env.DB.prepare("UPDATE campaigns SET status = ?, completed_at = NULL, updated_at = ? WHERE id = ?")
+      .bind("sending", now, sourceRun.campaign_id),
+    ...recipients.flatMap((recipient) => [
+      env.DB.prepare("UPDATE campaign_recipients SET status = ?, failed_at = NULL, failure_reason = NULL, updated_at = ? WHERE id = ?")
+        .bind("queued", now, recipient.id),
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO campaign_send_run_recipients (send_run_id, recipient_id, campaign_id, contact_id, created_at)
+         VALUES (?, ?, ?, ?, ?)`
+      ).bind(runId, recipient.id, sourceRun.campaign_id, recipient.contact_id, now)
+    ])
+  ];
+  await env.DB.batch(statements);
+  await refreshSendRun(env.DB, sourceRunId);
+  await Promise.all(recipients.map((recipient) => env.SEND_QUEUE.send({ campaignId: sourceRun.campaign_id, recipientId: recipient.id, sendRunId: runId })));
+  const run = await refreshSendRun(env.DB, runId);
+  if (!run) return { ok: false as const, statusCode: 500 as const, error: "Recovery run could not be created." };
+  return { ok: true as const, run, recoveredCount: recipients.length, campaign: await getCampaign(env.DB, sourceRun.campaign_id) };
 }
 
 async function retryFailedSendTask(env: Env, recipientId: string) {

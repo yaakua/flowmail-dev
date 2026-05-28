@@ -11,7 +11,7 @@
   ],
   "vars": {
     "DEFAULT_LOCALE": "en",
-    "DAILY_SEND_LIMIT": "250",
+    "DAILY_SEND_LIMIT": "1000",
     "SEND_RATE_PER_MINUTE": "30",
     "WORKER_NAME": "flowmail"
   },

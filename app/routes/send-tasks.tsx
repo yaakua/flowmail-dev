@@ -145,6 +145,12 @@ export default function SendTasks() {
     await load();
   }
 
+  async function recoverRun(runId: string) {
+    if (!window.confirm(t(locale, "recoverSendingRunConfirm"))) return;
+    await api(`/api/v1/send-runs/${runId}/recover`, { method: "POST", body: "{}" });
+    await load();
+  }
+
   async function retryTask(taskId: string) {
     await api(`/api/v1/send-tasks/${taskId}/retry`, { method: "POST", body: "{}" });
     await load();
@@ -377,6 +383,7 @@ export default function SendTasks() {
                       </td>
                       <td>
                         <Link className="secondary-link compact-link inline-row-link" to={sendRunDetailPath(locale, campaignId, run.id)}>{t(locale, "openSendRun")}</Link>
+                        {run.queued_count > 0 ? <button className="secondary-button compact-action" onClick={() => recoverRun(run.id)}>{t(locale, "recoverSendingRun")}</button> : null}
                         {run.failed_count > 0 ? <button className="secondary-button compact-action" onClick={() => retryRun(run.id)}>{t(locale, "retryFailed")}</button> : null}
                         <button className="danger-button compact-action" onClick={() => deleteRun(run.id)}>{t(locale, "deleteSendRun")}</button>
                       </td>
