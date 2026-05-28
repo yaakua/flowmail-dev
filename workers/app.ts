@@ -1152,6 +1152,7 @@ async function processSendJob(env: Env, job: SendJob) {
   const recipient = await env.DB.prepare("SELECT * FROM campaign_recipients WHERE id = ?").bind(job.recipientId).first<any>();
   if (!recipient || recipient.status === "sent") return;
   const sendRunId = job.sendRunId ?? await findSendRunIdForRecipient(env.DB, recipient.id);
+  if (sendRunId && await isRecoveredSourceRun(env.DB, sendRunId)) return;
 
   const [campaign, template, product, contact] = await Promise.all([
     getCampaign(env.DB, job.campaignId),
@@ -1653,11 +1654,34 @@ async function recoverSendingSendRun(env: Env, sourceRunId: string) {
 
   const now = new Date().toISOString();
   const runId = crypto.randomUUID();
+  const sourceMetadata = parseJsonObject(sourceRun.audience_filter_json);
   const statements = [
     env.DB.prepare(
       `INSERT INTO campaign_send_runs (id, campaign_id, status, audience_filter_json, requested_count, selected_count, queued_count, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(runId, sourceRun.campaign_id, "sending", JSON.stringify({ type: "recover_sending", sourceRunId }), recipients.length, recipients.length, recipients.length, now, now),
+    env.DB.prepare(
+      `UPDATE campaign_send_runs
+       SET status = ?, audience_filter_json = ?, queued_count = ?, sent_count = ?, failed_count = ?, updated_at = ?, completed_at = COALESCE(completed_at, ?)
+       WHERE id = ?`
+    ).bind(
+      "completed",
+      JSON.stringify({
+        ...sourceMetadata,
+        recovery: {
+          type: "requeued_sending",
+          recoveredAt: now,
+          recoveredCount: recipients.length,
+          recoveryRunId: runId
+        }
+      }),
+      0,
+      Number(sourceRun.sent_count ?? 0),
+      Number(sourceRun.failed_count ?? 0),
+      now,
+      now,
+      sourceRunId
+    ),
     env.DB.prepare("UPDATE campaigns SET status = ?, completed_at = NULL, updated_at = ? WHERE id = ?")
       .bind("sending", now, sourceRun.campaign_id),
     ...recipients.flatMap((recipient) => [
@@ -1670,7 +1694,6 @@ async function recoverSendingSendRun(env: Env, sourceRunId: string) {
     ])
   ];
   await env.DB.batch(statements);
-  await refreshSendRun(env.DB, sourceRunId);
   await Promise.all(recipients.map((recipient) => env.SEND_QUEUE.send({ campaignId: sourceRun.campaign_id, recipientId: recipient.id, sendRunId: runId })));
   const run = await refreshSendRun(env.DB, runId);
   if (!run) return { ok: false as const, statusCode: 500 as const, error: "Recovery run could not be created." };
@@ -1818,20 +1841,53 @@ async function getCampaignSendRuns(db: D1Database, campaignId?: string, limit = 
   const result = campaignId
     ? await db.prepare(sql).bind(campaignId, limit).all<any>()
     : await db.prepare(sql).bind(limit).all<any>();
-  return (result.results ?? []).map((run) => ({
-    ...run,
-    queued_count: Number(run.current_queued_count ?? run.queued_count ?? 0),
-    sent_count: Number(run.current_sent_count ?? run.sent_count ?? 0),
-    failed_count: Number(run.current_failed_count ?? run.failed_count ?? 0),
-    unsubscribed_count: Number(run.current_unsubscribed_count ?? 0),
-    suppressed_count: Number(run.current_suppressed_count ?? 0),
-    click_count: Number(run.click_count ?? 0),
-    unsubscribe_event_count: Number(run.unsubscribe_event_count ?? 0)
-  }));
+  return (result.results ?? []).map((run) => {
+    const metadata = sendRunMetadata(run.audience_filter_json);
+    const archived = Boolean(metadata.recovery_note);
+    return {
+      ...run,
+      ...metadata,
+      queued_count: archived ? Number(run.queued_count ?? 0) : Number(run.current_queued_count ?? run.queued_count ?? 0),
+      sent_count: archived ? Number(run.sent_count ?? 0) : Number(run.current_sent_count ?? run.sent_count ?? 0),
+      failed_count: archived ? Number(run.failed_count ?? 0) : Number(run.current_failed_count ?? run.failed_count ?? 0),
+      unsubscribed_count: Number(run.current_unsubscribed_count ?? 0),
+      suppressed_count: Number(run.current_suppressed_count ?? 0),
+      click_count: Number(run.click_count ?? 0),
+      unsubscribe_event_count: Number(run.unsubscribe_event_count ?? 0)
+    };
+  });
 }
 
 function placeholders(count: number) {
   return Array.from({ length: count }, () => "?").join(", ");
+}
+
+function parseJsonObject(value: string | null | undefined) {
+  try {
+    const parsed = value ? JSON.parse(value) : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function sendRunMetadata(value: string | null | undefined) {
+  const recovery = parseJsonObject(value).recovery;
+  if (!recovery || typeof recovery !== "object" || Array.isArray(recovery)) return {};
+  const details = recovery as Record<string, unknown>;
+  return {
+    recovery_note: "requeued_sending",
+    recovery_run_id: typeof details.recoveryRunId === "string" ? details.recoveryRunId : "",
+    recovered_count: typeof details.recoveredCount === "number" ? details.recoveredCount : 0,
+    recovered_at: typeof details.recoveredAt === "string" ? details.recoveredAt : ""
+  };
+}
+
+async function isRecoveredSourceRun(db: D1Database, sendRunId: string) {
+  const row = await db.prepare("SELECT audience_filter_json FROM campaign_send_runs WHERE id = ?")
+    .bind(sendRunId)
+    .first<{ audience_filter_json: string }>();
+  return Boolean(sendRunMetadata(row?.audience_filter_json).recovery_note);
 }
 
 async function refreshSendRunForRecipient(db: D1Database, recipientId: string, preferredRunId?: string) {

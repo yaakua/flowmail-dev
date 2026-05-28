@@ -56,6 +56,10 @@ type SendRun = {
   suppressed_count?: number;
   click_count?: number;
   unsubscribe_event_count?: number;
+  recovery_note?: string;
+  recovery_run_id?: string;
+  recovered_count?: number;
+  recovered_at?: string;
   created_at: string;
   completed_at: string | null;
 };
@@ -375,7 +379,14 @@ export default function SendTasks() {
                         <Link to={localizedPath(locale, `/campaigns/${run.campaign_id}`)}>{run.campaign_name || run.campaign_id}</Link>
                       </td>
                       <td><span className={statusClass(run.status)}>{translateStatus(locale, run.status)}</span></td>
-                      <td><SendRunMetrics locale={locale} run={run} /></td>
+                      <td>
+                        <SendRunMetrics locale={locale} run={run} />
+                        {run.recovery_note ? (
+                          <span className="muted">
+                            {t(locale, "sendRunRecoveredNote", { count: run.recovered_count ?? 0 })}
+                          </span>
+                        ) : null}
+                      </td>
                       <td>
                         <strong>{run.click_count ?? 0}</strong>
                         <br />
@@ -383,7 +394,7 @@ export default function SendTasks() {
                       </td>
                       <td>
                         <Link className="secondary-link compact-link inline-row-link" to={sendRunDetailPath(locale, campaignId, run.id)}>{t(locale, "openSendRun")}</Link>
-                        {run.queued_count > 0 ? <button className="secondary-button compact-action" onClick={() => recoverRun(run.id)}>{t(locale, "recoverSendingRun")}</button> : null}
+                        {run.status === "sending" && run.queued_count > 0 ? <button className="secondary-button compact-action" onClick={() => recoverRun(run.id)}>{t(locale, "recoverSendingRun")}</button> : null}
                         {run.failed_count > 0 ? <button className="secondary-button compact-action" onClick={() => retryRun(run.id)}>{t(locale, "retryFailed")}</button> : null}
                         <button className="danger-button compact-action" onClick={() => deleteRun(run.id)}>{t(locale, "deleteSendRun")}</button>
                       </td>
