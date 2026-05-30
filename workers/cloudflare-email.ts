@@ -222,7 +222,11 @@ export async function getCloudflareEmailConfig(db: D1Database, env: Pick<Env, "W
 }
 
 export async function getCloudflareReceiverConfig(db: D1Database, env: Pick<Env, "WORKER_NAME">): Promise<CloudflareReceiverPublicConfig> {
-  return toPublicReceiverConfig(await readReceiverStoredConfig(db), env);
+  const [receiverConfig, emailConfig] = await Promise.all([
+    readReceiverStoredConfig(db),
+    readStoredConfig(db)
+  ]);
+  return toPublicReceiverConfig(receiverConfig, env, emailConfig);
 }
 
 export async function discoverCloudflareEmailConfig(
@@ -767,21 +771,28 @@ function toPublicConfig(config: CloudflareEmailStoredConfig | null, env: Pick<En
   };
 }
 
-function toPublicReceiverConfig(config: CloudflareReceiverStoredConfig | null, env: Pick<Env, "WORKER_NAME">): CloudflareReceiverPublicConfig {
+function toPublicReceiverConfig(
+  config: CloudflareReceiverStoredConfig | null,
+  env: Pick<Env, "WORKER_NAME">,
+  fallbackEmailConfig: CloudflareEmailStoredConfig | null = null
+): CloudflareReceiverPublicConfig {
+  const tokenSource = config?.tokenCiphertext && config.tokenIv ? config : fallbackEmailConfig;
   if (!config) {
     return {
       zoneName: "",
-      workerName: normalizeWorkerName(env.WORKER_NAME || DEFAULT_WORKER_NAME),
+      workerName: normalizeWorkerName(fallbackEmailConfig?.workerName || env.WORKER_NAME || DEFAULT_WORKER_NAME),
       destinationAddress: "",
-      tokenSaved: false
+      tokenSaved: Boolean(tokenSource?.tokenCiphertext && tokenSource.tokenIv),
+      tokenLast4: tokenSource?.tokenLast4,
+      updatedAt: fallbackEmailConfig?.updatedAt
     };
   }
   return {
     zoneName: config.zoneName,
-    workerName: normalizeWorkerName(config.workerName || env.WORKER_NAME || DEFAULT_WORKER_NAME),
+    workerName: normalizeWorkerName(config.workerName || fallbackEmailConfig?.workerName || env.WORKER_NAME || DEFAULT_WORKER_NAME),
     destinationAddress: config.destinationAddress,
-    tokenSaved: Boolean(config.tokenCiphertext && config.tokenIv),
-    tokenLast4: config.tokenLast4,
+    tokenSaved: Boolean(tokenSource?.tokenCiphertext && tokenSource.tokenIv),
+    tokenLast4: tokenSource?.tokenLast4,
     updatedAt: config.updatedAt
   };
 }

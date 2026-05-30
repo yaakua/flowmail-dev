@@ -483,6 +483,23 @@ describe("cloudflare email config", () => {
     expect(await getCloudflareReceiverConfig(database, env())).toMatchObject({ tokenSaved: true });
   });
 
+  it("exposes saved email config token state for receiver setup before receiver config exists", async () => {
+    const database = db();
+    await saveConfig(database);
+
+    const loaded = await getCloudflareReceiverConfig(database, env());
+
+    expect(loaded).toMatchObject({
+      zoneName: "",
+      workerName: "flowmail",
+      destinationAddress: "",
+      tokenSaved: true,
+      tokenLast4: "cret"
+    });
+    expect(loaded).not.toHaveProperty("token");
+    expect(loaded).not.toHaveProperty("tokenCiphertext");
+  });
+
   it("applies a catch-all worker route for the receiver domain", async () => {
     const database = db();
     await saveReceiverConfig(database);
