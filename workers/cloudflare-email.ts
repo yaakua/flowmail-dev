@@ -322,7 +322,7 @@ export async function discoverSavedCloudflareEmailConfig(
   const config = await readStoredConfig(db);
   if (!config) throw new CloudflareEmailError("Save a Cloudflare API token before rediscovering domains.", 422);
   const token = await requireSavedToken(db, config, env);
-  return discoverCloudflareEmailConfig({ token, zoneName: input.zoneName }, env, fetcher);
+  return discoverCloudflareEmailConfig({ token, zoneName: input.zoneName || config.zoneName }, env, fetcher);
 }
 
 export async function validateSavedCloudflareEmailTokenForSetup(

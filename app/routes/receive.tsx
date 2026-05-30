@@ -167,7 +167,7 @@ export default function Receive() {
     try {
       const result = await api<CloudflareDiscovery>("/api/v1/cloudflare/email-config/discover-saved", {
         method: "POST",
-        body: JSON.stringify({})
+        body: JSON.stringify(rootZoneName.trim() ? { zoneName: rootZoneName.trim() } : {})
       });
       setDiscovery(result);
       const suggestedZone = result.selectedZone?.name || result.suggested?.zoneName || result.zones?.[0]?.name || "";

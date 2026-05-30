@@ -228,6 +228,26 @@ describe("cloudflare email config", () => {
     });
   });
 
+  it("uses the saved zone name when rediscovering domains from a saved token", async () => {
+    const database = db();
+    await saveConfig(database);
+    const base = cloudflareFetch();
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      const path = url.pathname.replace("/client/v4", "");
+      if (path === "/zones" && !url.searchParams.get("name")) return response({ success: true, result: [] });
+      return base.fetcher(input, init);
+    });
+
+    const discovered = await discoverSavedCloudflareEmailConfig(database, {}, env(), fetcher);
+
+    expect(discovered.selectedZone?.name).toBe("example.com");
+    expect(fetcher).toHaveBeenCalledWith(
+      "https://api.cloudflare.com/client/v4/zones?per_page=50&name=example.com",
+      expect.any(Object)
+    );
+  });
+
   it("uses global fetch with the correct receiver when no fetcher is injected", async () => {
     const { fetcher } = cloudflareFetch();
     const runtimeFetch = vi.fn(function (this: typeof globalThis, input: RequestInfo | URL, init?: RequestInit) {
