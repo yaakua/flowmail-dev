@@ -203,9 +203,6 @@ CREATE TABLE IF NOT EXISTS settings (
   value_json TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
-
-CREATE INDEX IF NOT EXISTS inbound_messages_recipient_idx ON inbound_messages(recipient, created_at);
-CREATE INDEX IF NOT EXISTS inbound_messages_recipient_domain_idx ON inbound_messages(recipient_domain, created_at);
 `;
 
 const initialized = new WeakSet<D1Database>();
@@ -239,6 +236,10 @@ async function runSchema(db: D1Database) {
   await addColumnIfMissing(db, "inbound_messages", "recipient", "TEXT");
   await addColumnIfMissing(db, "inbound_messages", "recipient_local", "TEXT");
   await addColumnIfMissing(db, "inbound_messages", "recipient_domain", "TEXT");
+  await db.batch([
+    db.prepare("CREATE INDEX IF NOT EXISTS inbound_messages_recipient_idx ON inbound_messages(recipient, created_at)"),
+    db.prepare("CREATE INDEX IF NOT EXISTS inbound_messages_recipient_domain_idx ON inbound_messages(recipient_domain, created_at)")
+  ]);
 }
 
 async function addColumnIfMissing(db: D1Database, table: string, column: string, type: string) {
