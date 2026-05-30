@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   applyCloudflareEmailRouting,
+  applyCloudflareReceiverCatchAllRouting,
   checkCloudflareEmailConfig,
+  checkCloudflareReceiverConfig,
   deleteCloudflareEmailToken,
   discoverCloudflareEmailConfig,
   discoverSavedCloudflareEmailConfig,
   getCloudflareEmailConfig,
+  getCloudflareReceiverConfig,
+  saveCloudflareReceiverConfig,
   saveCloudflareEmailConfig,
   sendCloudflareEmail
 } from "./cloudflare-email";
@@ -74,6 +78,13 @@ function response(body: unknown, status = 200) {
 function cloudflareFetch(options: { rules?: any[] } = {}) {
   const bodies: Array<{ method: string; path: string; body: any }> = [];
   const rules = [...(options.rules ?? [])];
+  let catchAllRule = {
+    id: "catch-all",
+    name: "Catch-all",
+    enabled: false,
+    matchers: [{ type: "all" }],
+    actions: [{ type: "drop", value: [] }]
+  };
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     const path = url.pathname.replace("/client/v4", "");
@@ -115,6 +126,13 @@ function cloudflareFetch(options: { rules?: any[] } = {}) {
     if (path === "/zones/zone-1/email/routing/rules" && method === "GET") {
       return response({ success: true, result: rules });
     }
+    if (path === "/zones/zone-1/email/routing/rules/catch_all" && method === "GET") {
+      return response({ success: true, result: catchAllRule });
+    }
+    if (path === "/zones/zone-1/email/routing/rules/catch_all" && method === "PUT") {
+      catchAllRule = { id: "catch-all", matchers: [{ type: "all" }], ...bodies.at(-1)?.body };
+      return response({ success: true, result: catchAllRule });
+    }
     if (path === "/zones/zone-1/email/routing/rules" && method === "POST") {
       if (!bodies.at(-1)?.body?.actions) {
         return response({ success: false, errors: [{ message: "Missing routing rule actions." }] }, 400);
@@ -147,6 +165,15 @@ async function saveConfig(database: D1Database) {
     workerName: "flowmail",
     fromEmail: "hello@example.com",
     replyToEmail: "support@example.com",
+    token: "cf-token-secret"
+  }, env());
+}
+
+async function saveReceiverConfig(database: D1Database) {
+  return saveCloudflareReceiverConfig(database, {
+    zoneName: "mail.example.com",
+    workerName: "flowmail",
+    destinationAddress: "collector@mail.example.com",
     token: "cf-token-secret"
   }, env());
 }
@@ -434,5 +461,88 @@ describe("cloudflare email config", () => {
     expect(bodies).toHaveLength(1);
     expect(bodies[0]).toMatchObject({ method: "PUT", path: "/zones/zone-1/email/routing/rules/rule-1" });
     expect(bodies[0].body.actions).toEqual([{ type: "worker", value: ["flowmail"] }]);
+  });
+
+  it("saves receiver config and reuses the existing encrypted token by default", async () => {
+    const database = db();
+    await saveConfig(database);
+
+    const saved = await saveCloudflareReceiverConfig(database, {
+      zoneName: "mail.example.com",
+      workerName: "flowmail",
+      destinationAddress: "collector@mail.example.com"
+    }, env());
+
+    expect(saved).toMatchObject({
+      zoneName: "mail.example.com",
+      workerName: "flowmail",
+      destinationAddress: "collector@mail.example.com",
+      tokenSaved: true,
+      tokenLast4: "cret"
+    });
+    expect(await getCloudflareReceiverConfig(database, env())).toMatchObject({ tokenSaved: true });
+  });
+
+  it("applies a catch-all worker route for the receiver domain", async () => {
+    const database = db();
+    await saveReceiverConfig(database);
+    const base = cloudflareFetch();
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname.replace("/client/v4", "") === "/zones" && url.searchParams.get("name") === "mail.example.com") {
+        return response({
+          success: true,
+          result: [{ id: "zone-1", name: "mail.example.com", status: "active", account: { id: "account-1", name: "Example Account" } }]
+        });
+      }
+      return base.fetcher(input, init);
+    });
+
+    const result = await applyCloudflareReceiverCatchAllRouting(database, env(), fetcher);
+
+    expect(result.ok).toBe(true);
+    expect(result.routing?.catchAllRule?.id).toBe("catch-all");
+    expect(base.bodies).toHaveLength(1);
+    expect(base.bodies[0]).toMatchObject({ method: "PUT", path: "/zones/zone-1/email/routing/rules/catch_all" });
+    expect(base.bodies[0].body).toEqual({
+      name: "Flowmail receiver catch-all: mail.example.com",
+      enabled: true,
+      matchers: [{ type: "all" }],
+      actions: [{ type: "worker", value: ["flowmail"] }]
+    });
+  });
+
+  it("checks the saved receiver catch-all route", async () => {
+    const database = db();
+    await saveReceiverConfig(database);
+    const base = cloudflareFetch();
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      const path = url.pathname.replace("/client/v4", "");
+      if (path === "/zones" && url.searchParams.get("name") === "mail.example.com") {
+        return response({
+          success: true,
+          result: [{ id: "zone-1", name: "mail.example.com", status: "active", account: { id: "account-1", name: "Example Account" } }]
+        });
+      }
+      if (path === "/zones/zone-1/email/routing/rules/catch_all") {
+        return response({
+          success: true,
+          result: {
+            id: "catch-all",
+            name: "Flowmail receiver catch-all: mail.example.com",
+            enabled: true,
+            actions: [{ type: "worker", value: ["flowmail"] }]
+          }
+        });
+      }
+      return base.fetcher(input, init);
+    });
+
+    const checked = await checkCloudflareReceiverConfig(database, env(), fetcher);
+
+    expect(checked.ok).toBe(true);
+    expect(checked.checks.map((check) => check.name)).toEqual(["token", "zone", "emailRouting", "catchAllRoute"]);
+    expect(checked.routing?.catchAllRule?.id).toBe("catch-all");
   });
 });

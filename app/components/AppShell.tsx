@@ -23,6 +23,7 @@ export function AppShell({ children, aside }: { children: React.ReactNode; aside
     { label: t(locale, "contacts"), path: "/contacts" },
     { label: t(locale, "sendRecords"), path: "/send-tasks" },
     { label: t(locale, "clickAnalytics"), path: "/clicks" },
+    { label: "Receive", path: "/receive" },
     { label: t(locale, "inbox"), path: "/inbox", badge: unreadInboxCount },
     { label: t(locale, "emailSettings"), path: "/settings" },
     { label: t(locale, "productSettings"), path: "/product-settings" }

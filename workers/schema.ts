@@ -175,6 +175,9 @@ CREATE TABLE IF NOT EXISTS inbound_messages (
   id TEXT PRIMARY KEY,
   campaign_id TEXT,
   contact_id TEXT,
+  recipient TEXT,
+  recipient_local TEXT,
+  recipient_domain TEXT,
   sender TEXT NOT NULL,
   subject TEXT,
   body_text TEXT,
@@ -200,6 +203,9 @@ CREATE TABLE IF NOT EXISTS settings (
   value_json TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS inbound_messages_recipient_idx ON inbound_messages(recipient, created_at);
+CREATE INDEX IF NOT EXISTS inbound_messages_recipient_domain_idx ON inbound_messages(recipient_domain, created_at);
 `;
 
 const initialized = new WeakSet<D1Database>();
@@ -229,5 +235,17 @@ async function runSchema(db: D1Database) {
   for (let index = 0; index < statements.length; index += 20) {
     const chunk = statements.slice(index, index + 20);
     await db.batch(chunk.map((statement) => db.prepare(statement)));
+  }
+  await addColumnIfMissing(db, "inbound_messages", "recipient", "TEXT");
+  await addColumnIfMissing(db, "inbound_messages", "recipient_local", "TEXT");
+  await addColumnIfMissing(db, "inbound_messages", "recipient_domain", "TEXT");
+}
+
+async function addColumnIfMissing(db: D1Database, table: string, column: string, type: string) {
+  try {
+    await db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`).run();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/duplicate column|already exists/i.test(message)) throw error;
   }
 }

@@ -2257,6 +2257,12 @@ input[readonly] {
   gap: var(--space-md);
 }
 
+.receive-grid {
+  display: grid;
+  grid-template-columns: minmax(18rem, 24rem) minmax(0, 1fr);
+  gap: var(--space-md);
+}
+
 .thread-list,
 .conversation {
   border: 1px solid var(--line);
@@ -2373,6 +2379,50 @@ input[readonly] {
   background: transparent;
   color: var(--ink);
   padding: 0;
+}
+
+.receive-config-panel .panel-title-row {
+  margin-bottom: var(--space-md);
+}
+
+.receive-search {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-xs);
+  border-bottom: 1px solid var(--line-soft);
+  padding: var(--space-sm);
+}
+
+.receive-empty {
+  padding: var(--space-sm);
+}
+
+.receive-message-list {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.receive-message {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.receive-message pre {
+  max-height: 12rem;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.api-snippet {
+  display: block;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink-soft);
+  padding: var(--space-xs);
+  font-size: var(--text-xs);
+  line-height: 1.4;
 }
 
 .reply-box {
@@ -2708,6 +2758,8 @@ input[readonly] {
   .stepper,
   .landing-band,
   .inbox-grid,
+  .receive-grid,
+  .receive-search,
   .task-row,
   .inline-check-form,
   .cloudflare-test-row,

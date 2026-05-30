@@ -21,15 +21,20 @@ import { classifyReply, draftReply } from "./ai";
 import {
   CloudflareEmailError,
   applyCloudflareEmailRouting,
+  applyCloudflareReceiverCatchAllRouting,
   checkCloudflareEmailConfig,
+  checkCloudflareReceiverConfig,
   deleteCloudflareEmailToken,
   discoverCloudflareEmailConfig,
   discoverSavedCloudflareEmailConfig,
   getCloudflareEmailConfig,
+  getCloudflareReceiverConfig,
+  saveCloudflareReceiverConfig,
   saveCloudflareEmailConfig,
   sendCloudflareEmail,
   validateCloudflareEmailTokenForSetup,
-  validateSavedCloudflareEmailTokenForSetup
+  validateSavedCloudflareEmailTokenForSetup,
+  validateSavedCloudflareReceiverTokenForSetup
 } from "./cloudflare-email";
 import { countD1Changes, runD1Batches, summarizeContactImport } from "./contact-import";
 import { sendEmail } from "./email-sender";
@@ -255,6 +260,46 @@ app.post("/api/v1/cloudflare/email-config/apply-routing", async (c) => {
 
 app.delete("/api/v1/cloudflare/email-config/token", async (c) => {
   return c.json(await deleteCloudflareEmailToken(c.env.DB, c.env));
+});
+
+app.get("/api/v1/cloudflare/receiver-config", async (c) => {
+  return c.json({ ...await getCloudflareReceiverConfig(c.env.DB, c.env), localSetupMode: isLocalSetupMode() });
+});
+
+app.put("/api/v1/cloudflare/receiver-config", async (c) => {
+  const body = z.object({
+    zoneName: z.string().min(1),
+    workerName: z.string().min(1).optional(),
+    destinationAddress: z.string().email(),
+    token: z.string().optional()
+  }).parse(await c.req.json());
+
+  try {
+    if (body.token?.trim()) {
+      await validateCloudflareEmailTokenForSetup({ token: body.token, zoneName: body.zoneName }, c.env);
+    } else {
+      await validateSavedCloudflareReceiverTokenForSetup(c.env.DB, { zoneName: body.zoneName }, c.env);
+    }
+    return c.json(await saveCloudflareReceiverConfig(c.env.DB, body, c.env));
+  } catch (error) {
+    return cloudflareEmailErrorResponse(c, error);
+  }
+});
+
+app.post("/api/v1/cloudflare/receiver-config/check", async (c) => {
+  const checked = await checkCloudflareReceiverConfig(c.env.DB, c.env);
+  return c.json(isLocalSetupMode() ? withLocalCatchAllRoutingSkip(checked) : checked);
+});
+
+app.post("/api/v1/cloudflare/receiver-config/apply-catch-all", async (c) => {
+  if (isLocalSetupMode()) {
+    return c.json(withLocalCatchAllRoutingSkip(await checkCloudflareReceiverConfig(c.env.DB, c.env)));
+  }
+  try {
+    return c.json(await applyCloudflareReceiverCatchAllRouting(c.env.DB, c.env));
+  } catch (error) {
+    return cloudflareEmailErrorResponse(c, error);
+  }
 });
 
 app.post("/api/v1/setup/cloudflare-check", async (c) => {
@@ -944,6 +989,24 @@ app.get("/api/v1/inbox/unread-count", async (c) => {
 });
 
 app.get("/api/v1/inbox", async (c) => {
+  const recipient = normalizeEmail(c.req.query("recipient") ?? "");
+  const domain = normalizeDomain(c.req.query("domain") ?? "");
+  const search = c.req.query("q")?.trim().slice(0, 120).toLowerCase();
+  const filters: string[] = [];
+  const binds: string[] = [];
+  if (recipient) {
+    filters.push("LOWER(inbound_messages.recipient) = ?");
+    binds.push(recipient);
+  }
+  if (domain) {
+    filters.push("LOWER(inbound_messages.recipient_domain) = ?");
+    binds.push(domain);
+  }
+  if (search) {
+    filters.push(`LOWER(COALESCE(inbound_messages.sender, '') || ' ' || COALESCE(inbound_messages.recipient, '') || ' ' || COALESCE(inbound_messages.subject, '') || ' ' || COALESCE(inbound_messages.body_text, '')) LIKE ?`);
+    binds.push(`%${search}%`);
+  }
+  const whereClause = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
   const messages = await c.env.DB.prepare(
     `SELECT inbound_messages.*, contacts.email as contact_email,
       CASE WHEN EXISTS (
@@ -953,9 +1016,57 @@ app.get("/api/v1/inbox", async (c) => {
           AND e.event_type IN ('reply_resolved', 'reply_needs_reply', 'reply_archived', 'reply_unsubscribed', 'manual_reply_sent', 'agent_reply_sent')
       ) THEN 0 ELSE 1 END as is_unread
      FROM inbound_messages LEFT JOIN contacts ON contacts.id = inbound_messages.contact_id
+     ${whereClause}
      ORDER BY inbound_messages.created_at DESC LIMIT 200`
-  ).all();
+  ).bind(...binds).all();
   return c.json(messages.results ?? []);
+});
+
+app.get("/api/v1/receive-mailboxes", async (c) => {
+  const domain = normalizeDomain(c.req.query("domain") ?? "");
+  const whereClause = domain ? "WHERE recipient_domain = ?" : "WHERE recipient IS NOT NULL AND recipient != ''";
+  const rows = await c.env.DB.prepare(
+    `SELECT
+       COALESCE(recipient, '') as recipient,
+       COALESCE(recipient_local, '') as recipient_local,
+       COALESCE(recipient_domain, '') as recipient_domain,
+       COUNT(*) as message_count,
+       MAX(created_at) as last_received_at
+     FROM inbound_messages
+     ${whereClause}
+     GROUP BY recipient, recipient_local, recipient_domain
+     ORDER BY last_received_at DESC
+     LIMIT 200`
+  ).bind(...(domain ? [domain] : [])).all();
+  return c.json(rows.results ?? []);
+});
+
+app.get("/api/v1/receive/latest", async (c) => {
+  const domain = normalizeDomain(c.req.query("domain") ?? "");
+  if (!domain) return c.json({ error: "domain query parameter is required." }, 422);
+
+  const message = await c.env.DB.prepare(
+    `SELECT
+       id,
+       recipient,
+       recipient_local,
+       recipient_domain,
+       sender,
+       subject,
+       body_text,
+       body_html_ref,
+       raw_email_ref,
+       thread_key,
+       classification,
+       created_at
+     FROM inbound_messages
+     WHERE LOWER(recipient_domain) = ?
+     ORDER BY created_at DESC
+     LIMIT 1`
+  ).bind(domain).first();
+
+  if (!message) return c.json({ error: "No email found for this domain." }, 404);
+  return c.json({ domain, message });
 });
 
 app.get("/api/v1/inbox/analysis", async (c) => {
@@ -1261,6 +1372,9 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
   await env.BUCKET.put(rawKey, raw, { httpMetadata: { contentType: "message/rfc822" } });
   const parsed = await PostalMime.parse(raw);
   const from = normalizeEmail((parsed.from as any)?.address ?? "");
+  const recipient = normalizeEmail(primaryRecipient(parsed));
+  const recipientDomain = domainFromEmail(recipient);
+  const recipientLocal = recipient && recipientDomain ? recipient.slice(0, -(recipientDomain.length + 1)) : "";
   const attribution = await resolveInboundAttribution(env.DB, parsed, from);
   const contact = attribution.contactId
     ? await env.DB.prepare("SELECT * FROM contacts WHERE id = ?").bind(attribution.contactId).first<Contact>()
@@ -1270,9 +1384,9 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
   const now = new Date().toISOString();
   const inboundId = crypto.randomUUID();
   await env.DB.prepare(
-    `INSERT INTO inbound_messages (id, campaign_id, contact_id, sender, subject, body_text, raw_email_ref, thread_key, classification, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(inboundId, attribution.campaignId, contact?.id ?? attribution.contactId, from || "unknown", parsed.subject ?? "", bodyText, rawKey, parsed.inReplyTo ?? parsed.messageId ?? "", classification, now).run();
+    `INSERT INTO inbound_messages (id, campaign_id, contact_id, recipient, recipient_local, recipient_domain, sender, subject, body_text, raw_email_ref, thread_key, classification, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(inboundId, attribution.campaignId, contact?.id ?? attribution.contactId, recipient || null, recipientLocal || null, recipientDomain || null, from || "unknown", parsed.subject ?? "", bodyText, rawKey, parsed.inReplyTo ?? parsed.messageId ?? "", classification, now).run();
   if (contact) {
     await writeEvent(env.DB, { eventType: "reply", campaignId: attribution.campaignId ?? undefined, recipientId: attribution.recipientId ?? undefined, contactId: contact.id, metadata: { inboundId, classification } });
   }
@@ -1391,6 +1505,29 @@ async function resolveInboundAttribution(db: D1Database, parsed: Awaited<ReturnT
 
 function headerValue(headers: Array<{ key: string; value: string }>, key: string) {
   return headers.find((header) => header.key.toLowerCase() === key.toLowerCase())?.value ?? "";
+}
+
+function primaryRecipient(parsed: Awaited<ReturnType<typeof PostalMime.parse>>) {
+  const directRecipient = firstAddress((parsed.to as any[]) ?? []) || firstAddress((parsed.cc as any[]) ?? []);
+  if (directRecipient) return directRecipient;
+  for (const key of ["delivered-to", "x-forwarded-to", "envelope-to", "to"]) {
+    const value = headerValue(parsed.headers, key);
+    const email = extractEmailAddress(value);
+    if (email) return email;
+  }
+  return "";
+}
+
+function firstAddress(addresses: any[]) {
+  for (const address of addresses ?? []) {
+    const email = normalizeEmail(address?.address ?? "");
+    if (email) return email;
+  }
+  return "";
+}
+
+function extractEmailAddress(value: string) {
+  return normalizeEmail(value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] ?? "");
 }
 
 function extractMessageIds(value: string) {
@@ -2004,6 +2141,10 @@ function allowedDomains(env: Env) {
   return (env.DOMAINS || "").split(",").map((domain) => domain.trim().toLowerCase()).filter(Boolean);
 }
 
+function normalizeDomain(value: string) {
+  return value.trim().toLowerCase().replace(/^@/, "");
+}
+
 function allowedSenderDomains(env: Env, product: Pick<Product, "sending_domain" | "default_from_email" | "reply_to_email">) {
   return Array.from(new Set([
     ...allowedDomains(env),
@@ -2085,6 +2226,16 @@ function withLocalReplyRoutingSkip(result: Awaited<ReturnType<typeof checkCloudf
     ...result,
     ok: checks.every((check) => check.ok),
     checks
+  };
+}
+
+function withLocalCatchAllRoutingSkip(result: Awaited<ReturnType<typeof checkCloudflareReceiverConfig>>) {
+  return {
+    ...result,
+    ok: result.checks.filter((check) => check.name !== "catchAllRoute").every((check) => check.ok),
+    checks: result.checks.map((check) => check.name === "catchAllRoute"
+      ? { ...check, ok: true, details: "Local setup mode skips Cloudflare catch-all routing. Deploy this Worker to Cloudflare to collect inbound mail." }
+      : check)
   };
 }
 

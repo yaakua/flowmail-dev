@@ -2,6 +2,7 @@ import type { Env } from "./types";
 import { getConfigEncryptionKey } from "./runtime-config";
 
 const CONFIG_KEY = "cloudflare_email_config";
+const RECEIVER_CONFIG_KEY = "cloudflare_receiver_config";
 const DEFAULT_WORKER_NAME = "flowmail";
 const CLOUDFLARE_API_TIMEOUT_MS = 20_000;
 const encoder = new TextEncoder();
@@ -18,11 +19,30 @@ export type CloudflareEmailStoredConfig = {
   updatedAt: string;
 };
 
+export type CloudflareReceiverStoredConfig = {
+  zoneName: string;
+  workerName: string;
+  destinationAddress: string;
+  tokenCiphertext?: string;
+  tokenIv?: string;
+  tokenLast4?: string;
+  updatedAt: string;
+};
+
 export type CloudflareEmailPublicConfig = {
   zoneName: string;
   workerName: string;
   fromEmail: string;
   replyToEmail: string;
+  tokenSaved: boolean;
+  tokenLast4?: string;
+  updatedAt?: string;
+};
+
+export type CloudflareReceiverPublicConfig = {
+  zoneName: string;
+  workerName: string;
+  destinationAddress: string;
   tokenSaved: boolean;
   tokenLast4?: string;
   updatedAt?: string;
@@ -36,8 +56,15 @@ export type SaveCloudflareEmailConfigInput = {
   token?: string;
 };
 
+export type SaveCloudflareReceiverConfigInput = {
+  zoneName: string;
+  workerName?: string;
+  destinationAddress: string;
+  token?: string;
+};
+
 export type CloudflareCheck = {
-  name: "token" | "zone" | "dns" | "emailRouting" | "replyToRoute";
+  name: "token" | "zone" | "dns" | "emailRouting" | "replyToRoute" | "catchAllRoute";
   ok: boolean;
   details: string;
 };
@@ -66,6 +93,17 @@ export type CloudflareEmailCheckResult = {
     enabled: boolean;
     status: string;
     replyToRule: CloudflareRoutingRule | null;
+  } | null;
+};
+
+export type CloudflareReceiverCheckResult = {
+  ok: boolean;
+  checks: CloudflareCheck[];
+  zone: { id: string; name: string; status?: string } | null;
+  routing: {
+    enabled: boolean;
+    status: string;
+    catchAllRule: CloudflareRoutingRule | null;
   } | null;
 };
 
@@ -183,6 +221,10 @@ export async function getCloudflareEmailConfig(db: D1Database, env: Pick<Env, "W
   return toPublicConfig(await readStoredConfig(db), env);
 }
 
+export async function getCloudflareReceiverConfig(db: D1Database, env: Pick<Env, "WORKER_NAME">): Promise<CloudflareReceiverPublicConfig> {
+  return toPublicReceiverConfig(await readReceiverStoredConfig(db), env);
+}
+
 export async function discoverCloudflareEmailConfig(
   input: CloudflareEmailDiscoveryInput,
   env: Pick<Env, "WORKER_NAME">,
@@ -292,6 +334,24 @@ export async function validateSavedCloudflareEmailTokenForSetup(
   return discovered;
 }
 
+export async function validateSavedCloudflareReceiverTokenForSetup(
+  db: D1Database,
+  input: Omit<CloudflareEmailDiscoveryInput, "token">,
+  env: Pick<Env, "CONFIG_ENCRYPTION_KEY" | "WORKER_NAME">,
+  fetcher: FetchLike = defaultFetch
+) {
+  const receiverConfig = await readReceiverStoredConfig(db);
+  if (receiverConfig?.tokenCiphertext && receiverConfig.tokenIv) {
+    const token = await requireSavedReceiverToken(db, receiverConfig, env);
+    const discovered = await discoverCloudflareEmailConfig({ token, zoneName: input.zoneName }, env, fetcher);
+    if (!discovered.ok) {
+      throw new CloudflareEmailError(`Cloudflare API token is missing required permissions: ${discovered.missingPermissions.join(", ")}.`, 422);
+    }
+    return discovered;
+  }
+  return validateSavedCloudflareEmailTokenForSetup(db, input, env, fetcher);
+}
+
 export async function saveCloudflareEmailConfig(
   db: D1Database,
   input: SaveCloudflareEmailConfigInput,
@@ -320,6 +380,146 @@ export async function saveCloudflareEmailConfig(
 
   await writeStoredConfig(db, next);
   return toPublicConfig(next, env);
+}
+
+export async function saveCloudflareReceiverConfig(
+  db: D1Database,
+  input: SaveCloudflareReceiverConfigInput,
+  env: Pick<Env, "CONFIG_ENCRYPTION_KEY" | "WORKER_NAME">
+): Promise<CloudflareReceiverPublicConfig> {
+  const existing = await readReceiverStoredConfig(db);
+  const fallbackEmailConfig = await readStoredConfig(db);
+  const now = new Date().toISOString();
+  const token = input.token?.trim();
+  const next: CloudflareReceiverStoredConfig = {
+    zoneName: normalizeDomain(input.zoneName),
+    workerName: normalizeWorkerName(input.workerName || env.WORKER_NAME || existing?.workerName || fallbackEmailConfig?.workerName || DEFAULT_WORKER_NAME),
+    destinationAddress: input.destinationAddress.trim().toLowerCase(),
+    tokenCiphertext: existing?.tokenCiphertext ?? fallbackEmailConfig?.tokenCiphertext,
+    tokenIv: existing?.tokenIv ?? fallbackEmailConfig?.tokenIv,
+    tokenLast4: existing?.tokenLast4 ?? fallbackEmailConfig?.tokenLast4,
+    updatedAt: now
+  };
+
+  if (token) {
+    const encrypted = await encryptToken(token, await getConfigEncryptionKey(db, env));
+    next.tokenCiphertext = encrypted.ciphertext;
+    next.tokenIv = encrypted.iv;
+    next.tokenLast4 = token.slice(-4);
+  }
+
+  await writeReceiverStoredConfig(db, next);
+  return toPublicReceiverConfig(next, env);
+}
+
+export async function checkCloudflareReceiverConfig(
+  db: D1Database,
+  env: Pick<Env, "CONFIG_ENCRYPTION_KEY" | "WORKER_NAME">,
+  fetcher: FetchLike = defaultFetch
+): Promise<CloudflareReceiverCheckResult> {
+  const config = await readReceiverStoredConfig(db);
+  const checks: CloudflareCheck[] = [];
+  const empty = receiverResult(false, checks, null, null);
+  if (!config) {
+    checks.push({ name: "token", ok: false, details: "No Cloudflare receiver config is saved." });
+    return empty();
+  }
+
+  const token = await decryptSavedReceiverToken(db, config, env, checks);
+  if (!token) return empty();
+
+  const client = new CloudflareEmailClient(token, fetcher);
+  try {
+    const verified = await client.verifyToken();
+    checks.push({ name: "token", ok: isActiveToken(verified), details: isActiveToken(verified) ? "Token active." : "Token verified but is not active." });
+  } catch (error) {
+    checks.push({ name: "token", ok: false, details: readableError(error) });
+    return empty();
+  }
+
+  let zone: CloudflareZone;
+  try {
+    zone = await client.getZoneByName(config.zoneName);
+    checks.push({ name: "zone", ok: true, details: `${zone.name} is accessible.` });
+  } catch (error) {
+    checks.push({ name: "zone", ok: false, details: readableError(error) });
+    return empty();
+  }
+
+  let routingStatus: CloudflareRoutingStatus | null = null;
+  let routingStatusError: unknown = null;
+  let catchAllRule: CloudflareRoutingRule | null = null;
+  let catchAllError: unknown = null;
+  try {
+    routingStatus = await client.getEmailRoutingStatus(zone.id);
+  } catch (error) {
+    routingStatusError = error;
+  }
+  try {
+    catchAllRule = await client.getCatchAllRoutingRule(zone.id);
+  } catch (error) {
+    catchAllError = error;
+  }
+
+  if (routingStatus) {
+    checks.push({
+      name: "emailRouting",
+      ok: Boolean(routingStatus.enabled),
+      details: routingStatus.enabled ? "Email Routing enabled." : `Email Routing is ${routingStatus.status || "not enabled"}.`
+    });
+  } else if (catchAllRule && (!routingStatusError || isAuthenticationError(routingStatusError))) {
+    checks.push({
+      name: "emailRouting",
+      ok: true,
+      details: routingStatusError
+        ? "Catch-all routing is readable. Email Routing status requires Zone Settings Read, so Flowmail skipped the enabled-status check."
+        : "Catch-all routing is readable."
+    });
+  } else if (routingStatusError || catchAllError) {
+    checks.push({ name: "emailRouting", ok: false, details: emailRoutingReadableError(catchAllError ?? routingStatusError) });
+  }
+
+  if (catchAllRule) {
+    const catchesAll = catchAllRule.enabled !== false && hasWorkerAction(catchAllRule, config.workerName);
+    checks.push({
+      name: "catchAllRoute",
+      ok: catchesAll,
+      details: catchesAll
+        ? `All ${config.zoneName} recipients route to ${config.workerName}.`
+        : `Catch-all routing for ${config.zoneName} is not routed to ${config.workerName}.`
+    });
+  }
+
+  return {
+    ok: checks.every((check) => check.ok),
+    checks,
+    zone: { id: zone.id, name: zone.name, status: zone.status },
+    routing: catchAllRule ? {
+      enabled: Boolean(routingStatus?.enabled),
+      status: routingStatus?.status || (routingStatus?.enabled ? "enabled" : "unknown"),
+      catchAllRule: catchesAllPublicRule(catchAllRule, config.workerName)
+    } : null
+  };
+}
+
+export async function applyCloudflareReceiverCatchAllRouting(
+  db: D1Database,
+  env: Pick<Env, "CONFIG_ENCRYPTION_KEY" | "WORKER_NAME">,
+  fetcher: FetchLike = defaultFetch
+): Promise<CloudflareReceiverCheckResult & { rule: CloudflareRoutingRule }> {
+  const config = await readReceiverStoredConfig(db);
+  if (!config) throw new CloudflareEmailError("Save Cloudflare receiver config before applying catch-all routing.", 422);
+  const token = await requireSavedReceiverToken(db, config, env);
+  const client = new CloudflareEmailClient(token, fetcher);
+  const zone = await client.getZoneByName(config.zoneName);
+  const rule = await client.updateCatchAllRoutingRule(zone.id, buildCatchAllRoutingRulePayload(config));
+  const checked = await checkCloudflareReceiverConfig(db, env, fetcher);
+  return {
+    ...checked,
+    ok: checked.checks.every((check) => check.ok),
+    zone: checked.zone ?? { id: zone.id, name: zone.name, status: zone.status },
+    rule: toPublicRule(rule)
+  };
 }
 
 export async function deleteCloudflareEmailToken(db: D1Database, env: Pick<Env, "WORKER_NAME">): Promise<CloudflareEmailPublicConfig> {
@@ -522,11 +722,28 @@ async function readStoredConfig(db: D1Database): Promise<CloudflareEmailStoredCo
   }
 }
 
+async function readReceiverStoredConfig(db: D1Database): Promise<CloudflareReceiverStoredConfig | null> {
+  const row = await db.prepare("SELECT value_json FROM settings WHERE key = ?").bind(RECEIVER_CONFIG_KEY).first<{ value_json: string }>();
+  if (!row?.value_json) return null;
+  try {
+    return JSON.parse(row.value_json) as CloudflareReceiverStoredConfig;
+  } catch {
+    return null;
+  }
+}
+
 async function writeStoredConfig(db: D1Database, config: CloudflareEmailStoredConfig) {
   await db.prepare(
     `INSERT INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)
      ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`
   ).bind(CONFIG_KEY, JSON.stringify(config), config.updatedAt).run();
+}
+
+async function writeReceiverStoredConfig(db: D1Database, config: CloudflareReceiverStoredConfig) {
+  await db.prepare(
+    `INSERT INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`
+  ).bind(RECEIVER_CONFIG_KEY, JSON.stringify(config), config.updatedAt).run();
 }
 
 function toPublicConfig(config: CloudflareEmailStoredConfig | null, env: Pick<Env, "WORKER_NAME">): CloudflareEmailPublicConfig {
@@ -550,6 +767,25 @@ function toPublicConfig(config: CloudflareEmailStoredConfig | null, env: Pick<En
   };
 }
 
+function toPublicReceiverConfig(config: CloudflareReceiverStoredConfig | null, env: Pick<Env, "WORKER_NAME">): CloudflareReceiverPublicConfig {
+  if (!config) {
+    return {
+      zoneName: "",
+      workerName: normalizeWorkerName(env.WORKER_NAME || DEFAULT_WORKER_NAME),
+      destinationAddress: "",
+      tokenSaved: false
+    };
+  }
+  return {
+    zoneName: config.zoneName,
+    workerName: normalizeWorkerName(config.workerName || env.WORKER_NAME || DEFAULT_WORKER_NAME),
+    destinationAddress: config.destinationAddress,
+    tokenSaved: Boolean(config.tokenCiphertext && config.tokenIv),
+    tokenLast4: config.tokenLast4,
+    updatedAt: config.updatedAt
+  };
+}
+
 async function decryptSavedToken(db: D1Database, config: CloudflareEmailStoredConfig, env: Pick<Env, "CONFIG_ENCRYPTION_KEY">, checks: CloudflareCheck[]) {
   if (!config.tokenCiphertext || !config.tokenIv) {
     checks.push({ name: "token", ok: false, details: "No Cloudflare API token is saved." });
@@ -563,12 +799,34 @@ async function decryptSavedToken(db: D1Database, config: CloudflareEmailStoredCo
   }
 }
 
+async function decryptSavedReceiverToken(db: D1Database, config: CloudflareReceiverStoredConfig, env: Pick<Env, "CONFIG_ENCRYPTION_KEY">, checks: CloudflareCheck[]) {
+  if (!config.tokenCiphertext || !config.tokenIv) {
+    checks.push({ name: "token", ok: false, details: "No Cloudflare API token is saved." });
+    return null;
+  }
+  try {
+    return await decryptToken(config.tokenCiphertext, config.tokenIv, await getConfigEncryptionKey(db, env));
+  } catch {
+    checks.push({ name: "token", ok: false, details: "Saved token could not be decrypted. Save the token again." });
+    return null;
+  }
+}
+
 async function requireSavedToken(db: D1Database, config: CloudflareEmailStoredConfig, env: Pick<Env, "CONFIG_ENCRYPTION_KEY">) {
   if (!config.tokenCiphertext || !config.tokenIv) throw new CloudflareEmailError("Save a Cloudflare API token before applying routing.", 422);
   try {
     return await decryptToken(config.tokenCiphertext, config.tokenIv, await getConfigEncryptionKey(db, env));
   } catch {
     throw new CloudflareEmailError("Saved token could not be decrypted. Delete it and save a new token.", 422);
+  }
+}
+
+async function requireSavedReceiverToken(db: D1Database, config: CloudflareReceiverStoredConfig, env: Pick<Env, "CONFIG_ENCRYPTION_KEY">) {
+  if (!config.tokenCiphertext || !config.tokenIv) throw new CloudflareEmailError("Save a Cloudflare API token before applying catch-all routing.", 422);
+  try {
+    return await decryptToken(config.tokenCiphertext, config.tokenIv, await getConfigEncryptionKey(db, env));
+  } catch {
+    throw new CloudflareEmailError("Saved token could not be decrypted. Save the token again.", 422);
   }
 }
 
@@ -651,6 +909,10 @@ class CloudflareEmailClient {
     return this.api<CloudflareRoutingRule[]>(`/zones/${zoneId}/email/routing/rules?per_page=100`);
   }
 
+  getCatchAllRoutingRule(zoneId: string) {
+    return this.api<CloudflareRoutingRule>(`/zones/${zoneId}/email/routing/rules/catch_all`);
+  }
+
   probeRoutingRuleEdit(zoneId: string) {
     return this.probeApiPermission(`/zones/${zoneId}/email/routing/rules`, {
       method: "POST",
@@ -668,6 +930,13 @@ class CloudflareEmailClient {
   updateRoutingRule(zoneId: string, ruleId: string, payload: Record<string, unknown>) {
     if (!ruleId) throw new CloudflareEmailError("Cannot update a routing rule without a rule id.", 422);
     return this.api<CloudflareRoutingRule>(`/zones/${zoneId}/email/routing/rules/${ruleId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    });
+  }
+
+  updateCatchAllRoutingRule(zoneId: string, payload: Record<string, unknown>) {
+    return this.api<CloudflareRoutingRule>(`/zones/${zoneId}/email/routing/rules/catch_all`, {
       method: "PUT",
       body: JSON.stringify(payload)
     });
@@ -781,6 +1050,15 @@ function buildRoutingRulePayload(config: CloudflareEmailStoredConfig) {
   };
 }
 
+function buildCatchAllRoutingRulePayload(config: CloudflareReceiverStoredConfig) {
+  return {
+    name: `Flowmail receiver catch-all: ${config.zoneName}`,
+    enabled: true,
+    matchers: [{ type: "all" }],
+    actions: [{ type: "worker", value: [config.workerName] }]
+  };
+}
+
 function findExistingReplyToRule(rules: CloudflareRoutingRule[], replyToEmail: string) {
   return rules.find((rule) => hasLiteralRecipientMatcher(rule, replyToEmail) || rule.name === `Flowmail inbound: ${replyToEmail}`);
 }
@@ -813,6 +1091,10 @@ function toPublicRule(rule: CloudflareRoutingRule): CloudflareRoutingRule {
     matchers: rule.matchers,
     actions: rule.actions
   };
+}
+
+function catchesAllPublicRule(rule: CloudflareRoutingRule, workerName: string) {
+  return rule.enabled !== false && hasWorkerAction(rule, workerName) ? toPublicRule(rule) : null;
 }
 
 function normalizeDomain(value: string) {
@@ -919,4 +1201,13 @@ function result(
   routing: CloudflareEmailCheckResult["routing"]
 ) {
   return () => ({ ok, checks, zone, dns, routing });
+}
+
+function receiverResult(
+  ok: boolean,
+  checks: CloudflareCheck[],
+  zone: CloudflareReceiverCheckResult["zone"],
+  routing: CloudflareReceiverCheckResult["routing"]
+) {
+  return () => ({ ok, checks, zone, routing });
 }
