@@ -59,7 +59,7 @@ export type SaveCloudflareEmailConfigInput = {
 export type SaveCloudflareReceiverConfigInput = {
   zoneName: string;
   workerName?: string;
-  destinationAddress: string;
+  destinationAddress?: string;
   token?: string;
 };
 
@@ -394,7 +394,7 @@ export async function saveCloudflareReceiverConfig(
   const next: CloudflareReceiverStoredConfig = {
     zoneName: normalizeDomain(input.zoneName),
     workerName: normalizeWorkerName(input.workerName || env.WORKER_NAME || existing?.workerName || fallbackEmailConfig?.workerName || DEFAULT_WORKER_NAME),
-    destinationAddress: input.destinationAddress.trim().toLowerCase(),
+    destinationAddress: input.destinationAddress?.trim().toLowerCase() || existing?.destinationAddress || "",
     tokenCiphertext: existing?.tokenCiphertext ?? fallbackEmailConfig?.tokenCiphertext,
     tokenIv: existing?.tokenIv ?? fallbackEmailConfig?.tokenIv,
     tokenLast4: existing?.tokenLast4 ?? fallbackEmailConfig?.tokenLast4,

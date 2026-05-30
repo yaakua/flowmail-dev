@@ -2393,6 +2393,15 @@ input[readonly] {
   padding: var(--space-sm);
 }
 
+.receive-test-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-xs);
+  border-top: 1px solid var(--line-soft);
+  margin-top: var(--space-sm);
+  padding-top: var(--space-sm);
+}
+
 .receive-empty {
   padding: var(--space-sm);
 }
@@ -2760,6 +2769,7 @@ input[readonly] {
   .inbox-grid,
   .receive-grid,
   .receive-search,
+  .receive-test-row,
   .task-row,
   .inline-check-form,
   .cloudflare-test-row,

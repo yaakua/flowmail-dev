@@ -13,7 +13,7 @@ export function localizedPath(locale: Locale, path: string) {
   return locale === "en" ? clean : `/${locale}${clean === "/" ? "" : clean}`;
 }
 
-export function AppShell({ children, aside }: { children: React.ReactNode; aside?: React.ReactNode }) {
+export function AppShell({ children, aside, hideTopbar = false }: { children: React.ReactNode; aside?: React.ReactNode; hideTopbar?: boolean }) {
   const locale = useLocale();
   const location = useLocation();
   const currentPath = stripLocale(location.pathname);
@@ -23,7 +23,7 @@ export function AppShell({ children, aside }: { children: React.ReactNode; aside
     { label: t(locale, "contacts"), path: "/contacts" },
     { label: t(locale, "sendRecords"), path: "/send-tasks" },
     { label: t(locale, "clickAnalytics"), path: "/clicks" },
-    { label: "Receive", path: "/receive" },
+    { label: t(locale, "receive"), path: "/receive" },
     { label: t(locale, "inbox"), path: "/inbox", badge: unreadInboxCount },
     { label: t(locale, "emailSettings"), path: "/settings" },
     { label: t(locale, "productSettings"), path: "/product-settings" }
@@ -64,12 +64,14 @@ export function AppShell({ children, aside }: { children: React.ReactNode; aside
         </div>
       </aside>
       <main className="workspace" id="main-content">
-        <header className="workspace-topbar">
-          <div>
-            <span>{t(locale, "operatorConsole")}</span>
-            <strong>{t(locale, "operatorSummary")}</strong>
-          </div>
-        </header>
+        {hideTopbar ? null : (
+          <header className="workspace-topbar">
+            <div>
+              <span>{t(locale, "operatorConsole")}</span>
+              <strong>{t(locale, "operatorSummary")}</strong>
+            </div>
+          </header>
+        )}
         {children}
       </main>
       {aside ? <aside className="inspector">{aside}</aside> : null}

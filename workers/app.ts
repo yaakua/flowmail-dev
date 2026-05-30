@@ -270,7 +270,7 @@ app.put("/api/v1/cloudflare/receiver-config", async (c) => {
   const body = z.object({
     zoneName: z.string().min(1),
     workerName: z.string().min(1).optional(),
-    destinationAddress: z.string().email(),
+    destinationAddress: z.string().email().optional(),
     token: z.string().optional()
   }).parse(await c.req.json());
 
@@ -1067,6 +1067,38 @@ app.get("/api/v1/receive/latest", async (c) => {
 
   if (!message) return c.json({ error: "No email found for this domain." }, 404);
   return c.json({ domain, message });
+});
+
+app.post("/api/v1/receive/test-email", async (c) => {
+  const body = z.object({ to: z.string().email() }).parse(await c.req.json());
+  const product = await getProduct(c.env.DB);
+  const sender = validateSenderDomain(product.default_from_email, allowedSenderDomains(c.env, product));
+  if (!sender.ok) return c.json({ error: "Save a Cloudflare Email config before sending from this domain." }, 422);
+
+  const now = new Date().toISOString();
+  const subject = `Flowmail receive test for ${body.to}`;
+  const text = `This is a Flowmail receive test email sent at ${now}.\n\nIf Email Routing catch-all is configured, this message should appear in the receive platform.`;
+  const html = `<p>This is a Flowmail receive test email sent at ${escapeHtmlForEmail(now)}.</p><p>If Email Routing catch-all is configured, this message should appear in the receive platform.</p>`;
+  let sent: { messageId: string; provider?: string };
+  let provider = "cloudflare-binding";
+  try {
+    sent = await sendOutboundEmail(c.env, {
+      to: body.to,
+      from: { email: product.default_from_email, name: product.name },
+      replyTo: product.reply_to_email || product.default_from_email,
+      subject,
+      html,
+      text,
+      headers: {
+        "X-Flowmail-Receive-Test": "true"
+      }
+    });
+    provider = sent.provider ?? provider;
+  } catch (error) {
+    return cloudflareEmailErrorResponse(c, error);
+  }
+  await writeEvent(c.env.DB, { eventType: "receive_test_email", metadata: { to: body.to, messageId: sent.messageId } });
+  return c.json({ ok: true, to: body.to, messageId: sent.messageId, simulated: provider !== "cloudflare-api" && import.meta.env.DEV, provider });
 });
 
 app.get("/api/v1/inbox/analysis", async (c) => {
